@@ -1,4 +1,4 @@
-import { Document, Page, Text, View, StyleSheet } from "@react-pdf/renderer";
+import { Document, Page, Text, View, Image, StyleSheet } from "@react-pdf/renderer";
 import type { Currency, ExpenseGroup, PayerDetails, SplitConfig } from "@/lib/types";
 import { APP_NAME } from "@/lib/constants";
 import { calculateGroupTotal, calculateGrandTotal, computeSplitShare, getValidGroups, getValidLineItems } from "@/lib/validation";
@@ -183,13 +183,35 @@ const styles = StyleSheet.create({
     backgroundColor: "#f5f7ff",
   },
   splitCellName: {
-    width: "70%",
+    width: "50%",
     padding: 6,
   },
   splitCellAmount: {
+    width: "25%",
+    padding: 6,
+    textAlign: "right",
+  },
+  splitCellNameWide: {
+    width: "70%",
+    padding: 6,
+  },
+  splitCellAmountNarrow: {
     width: "30%",
     padding: 6,
     textAlign: "right",
+  },
+  splitCellStatus: {
+    width: "25%",
+    padding: 6,
+    textAlign: "right",
+  },
+  statusPaid: {
+    color: "#059669",
+    fontWeight: 700,
+  },
+  statusPending: {
+    color: "#b45309",
+    fontWeight: 700,
   },
   section: {
     marginTop: 20,
@@ -201,11 +223,15 @@ const styles = StyleSheet.create({
     color: "#4f46e5",
   },
   detailsBox: {
+    flexDirection: "row",
     borderWidth: 1,
     borderColor: "#cbd5e1",
     borderStyle: "solid",
     borderRadius: 4,
     padding: 10,
+  },
+  detailsText: {
+    flex: 1,
   },
   detailRow: {
     flexDirection: "row",
@@ -219,6 +245,23 @@ const styles = StyleSheet.create({
   detailValue: {
     flex: 1,
     color: "#0f172a",
+  },
+  qrCodeWrap: {
+    marginLeft: 12,
+    alignItems: "center",
+  },
+  qrCodeImage: {
+    width: 90,
+    height: 90,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderStyle: "solid",
+  },
+  qrCodeLabel: {
+    marginTop: 4,
+    fontSize: 7,
+    color: "#64748b",
+    textAlign: "center",
   },
   footer: {
     position: "absolute",
@@ -261,11 +304,12 @@ export interface ExpenseReportDocumentProps {
 export function ExpenseReportDocument({ groups, payer, currency, split, generatedAt }: ExpenseReportDocumentProps) {
   const validGroups = getValidGroups(groups);
   const grandTotal = calculateGrandTotal(groups);
-  const hasPayerDetails = Boolean(payer.phone.trim() || payer.upiId.trim() || payer.notes.trim());
+  const hasPayerDetails = Boolean(payer.phone.trim() || payer.upiId.trim() || payer.notes.trim() || payer.qrCodeImage);
   const created = generatedAt ?? new Date();
   const symbol = currency.symbol;
 
   const splitShare = split?.enabled ? computeSplitShare(grandTotal, split.people) : null;
+  const showSplitStatus = Boolean(splitShare?.shares.some((share) => share.isSelf));
 
   return (
     <Document title="Expense Report" author={APP_NAME}>
@@ -349,24 +393,43 @@ export function ExpenseReportDocument({ groups, payer, currency, split, generate
 
               <View style={styles.splitTable}>
                 <View style={styles.splitHeaderRow}>
-                  <View style={styles.splitCellName}>
+                  <View style={showSplitStatus ? styles.splitCellName : styles.splitCellNameWide}>
                     <Text style={styles.headerCellText}>Person</Text>
                   </View>
-                  <View style={styles.splitCellAmount}>
+                  <View style={showSplitStatus ? styles.splitCellAmount : styles.splitCellAmountNarrow}>
                     <Text style={styles.headerCellText}>Amount owed</Text>
                   </View>
+                  {showSplitStatus && (
+                    <View style={styles.splitCellStatus}>
+                      <Text style={styles.headerCellText}>Status</Text>
+                    </View>
+                  )}
                 </View>
                 {splitShare.shares.map((share, index) => (
                   <View key={share.id} style={index % 2 === 1 ? styles.splitRowAlt : styles.splitRow}>
-                    <View style={styles.splitCellName}>
-                      <Text>{share.name}</Text>
+                    <View style={showSplitStatus ? styles.splitCellName : styles.splitCellNameWide}>
+                      <Text>{share.name}{share.isSelf ? " (me)" : ""}</Text>
                     </View>
-                    <View style={styles.splitCellAmount}>
+                    <View style={showSplitStatus ? styles.splitCellAmount : styles.splitCellAmountNarrow}>
                       <Text>{formatCurrency(share.amount, symbol)}</Text>
                     </View>
+                    {showSplitStatus && (
+                      <View style={styles.splitCellStatus}>
+                        <Text style={share.isSelf ? styles.statusPaid : styles.statusPending}>
+                          {share.isSelf ? "Paid" : "Pending"}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                 ))}
               </View>
+
+              {showSplitStatus && (
+                <Text style={styles.splitNote}>
+                  {splitShare.shares.find((s) => s.isSelf)?.name} already paid the full amount - everyone else still
+                  owes their share above.
+                </Text>
+              )}
 
               {splitShare.extraCount > 0 && (
                 <Text style={styles.splitNote}>
@@ -383,22 +446,31 @@ export function ExpenseReportDocument({ groups, payer, currency, split, generate
           <View style={styles.section} wrap={false}>
             <Text style={styles.sectionTitle}>Payment Details</Text>
             <View style={styles.detailsBox}>
-              {payer.phone.trim() && (
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Phone</Text>
-                  <Text style={styles.detailValue}>{payer.phone.trim()}</Text>
-                </View>
-              )}
-              {payer.upiId.trim() && (
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>UPI ID</Text>
-                  <Text style={styles.detailValue}>{payer.upiId.trim()}</Text>
-                </View>
-              )}
-              {payer.notes.trim() && (
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Notes</Text>
-                  <Text style={styles.detailValue}>{payer.notes.trim()}</Text>
+              <View style={styles.detailsText}>
+                {payer.phone.trim() && (
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Phone</Text>
+                    <Text style={styles.detailValue}>{payer.phone.trim()}</Text>
+                  </View>
+                )}
+                {payer.upiId.trim() && (
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>UPI ID</Text>
+                    <Text style={styles.detailValue}>{payer.upiId.trim()}</Text>
+                  </View>
+                )}
+                {payer.notes.trim() && (
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Notes</Text>
+                    <Text style={styles.detailValue}>{payer.notes.trim()}</Text>
+                  </View>
+                )}
+              </View>
+              {payer.qrCodeImage && (
+                <View style={styles.qrCodeWrap}>
+                  {/* eslint-disable-next-line jsx-a11y/alt-text -- @react-pdf/renderer's Image is a PDF-drawing primitive, not an HTML <img>; it has no alt prop */}
+                  <Image src={payer.qrCodeImage} style={styles.qrCodeImage} />
+                  <Text style={styles.qrCodeLabel}>Scan to pay</Text>
                 </View>
               )}
             </View>

@@ -14,6 +14,9 @@ import {
   Wallet,
   Receipt,
   ClipboardList,
+  QrCode,
+  ImageUp,
+  UserCheck,
 } from "lucide-react";
 import { AUTOSAVE_DEBOUNCE_MS, CURRENCIES, DEFAULT_CURRENCY, MIN_SPLIT_PEOPLE, PAYMENT_METHODS } from "@/lib/constants";
 import { loadDraft, saveDraft } from "@/lib/storage";
@@ -25,6 +28,7 @@ import {
   getValidGroups,
   getValidLineItems,
   getValidSplitPeople,
+  isValidQrImageFile,
   isValidSplitCount,
   validateRecipients,
 } from "@/lib/validation";
@@ -52,10 +56,10 @@ function createEmptyGroup(name = ""): ExpenseGroup {
 }
 
 function createEmptySplitPerson(): SplitPerson {
-  return { id: randomId(), name: "" };
+  return { id: randomId(), name: "", isSelf: false };
 }
 
-const EMPTY_PAYER: PayerDetails = { phone: "", upiId: "", notes: "" };
+const EMPTY_PAYER: PayerDetails = { phone: "", upiId: "", notes: "", qrCodeImage: null };
 const EMPTY_SPLIT: SplitConfig = { enabled: false, people: [] };
 
 type SendState =
@@ -74,7 +78,9 @@ export function ExpenseTracker() {
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [recipientsInput, setRecipientsInput] = useState("");
   const [sendState, setSendState] = useState<SendState>({ status: "idle" });
+  const [qrError, setQrError] = useState<string | null>(null);
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const qrInputRef = useRef<HTMLInputElement>(null);
   const reduceMotion = useReducedMotion();
 
   // Hydrate from localStorage on mount only. This is a one-time load of external state (not a
@@ -175,6 +181,40 @@ export function ExpenseTracker() {
       people: enabled && prev.people.length === 0 ? [createEmptySplitPerson(), createEmptySplitPerson()] : prev.people,
       enabled,
     }));
+  }, []);
+
+  /** Marks exactly one person as "this is me" - selecting a new one clears any previous choice. */
+  const setSelfPerson = useCallback((personId: string) => {
+    setSplit((prev) => ({
+      ...prev,
+      people: prev.people.map((person) => ({ ...person, isSelf: person.id === personId })),
+    }));
+  }, []);
+
+  const clearSelfPerson = useCallback(() => {
+    setSplit((prev) => ({ ...prev, people: prev.people.map((person) => ({ ...person, isSelf: false })) }));
+  }, []);
+
+  const handleQrUpload = useCallback((file: File | undefined) => {
+    if (!file) return;
+    setQrError(null);
+    if (!isValidQrImageFile(file)) {
+      setQrError("Please upload an image under 1MB (PNG, JPG, etc.) - a screenshot of your UPI QR code works well.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        setPayer((prev) => ({ ...prev, qrCodeImage: reader.result as string }));
+      }
+    };
+    reader.onerror = () => setQrError("Couldn't read that image. Please try a different file.");
+    reader.readAsDataURL(file);
+  }, []);
+
+  const removeQrImage = useCallback(() => {
+    setPayer((prev) => ({ ...prev, qrCodeImage: null }));
+    setQrError(null);
   }, []);
 
   const handleDownload = useCallback(async () => {
@@ -583,9 +623,21 @@ export function ExpenseTracker() {
 
             {split.enabled && grandTotal > 0 && (
               <div className="mt-3">
-                <span className="mb-1 block text-sm font-medium text-slate-700">Split between</span>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="block text-sm font-medium text-slate-700">Split between</span>
+                  {split.people.some((p) => p.isSelf) && (
+                    <button
+                      type="button"
+                      onClick={clearSelfPerson}
+                      className="text-xs font-medium text-slate-400 underline-offset-2 hover:text-accent hover:underline"
+                    >
+                      Clear &quot;this is me&quot;
+                    </button>
+                  )}
+                </div>
                 <p className="mb-2 text-xs text-slate-500">
-                  Name at least {MIN_SPLIT_PEOPLE} people - each gets an equal share of the grand total.
+                  Name at least {MIN_SPLIT_PEOPLE} people - each gets an equal share of the grand total. Mark
+                  yourself with &quot;this is me&quot; if you already paid, so the PDF shows who still owes you.
                 </p>
 
                 <div className="space-y-2">
@@ -599,6 +651,23 @@ export function ExpenseTracker() {
                           placeholder={`Person ${index + 1} name`}
                           className="w-full max-w-sm rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900 outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
                         />
+                        <label
+                          className={`inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-medium transition-colors ${
+                            person.isSelf
+                              ? "border-accent bg-accent-soft text-accent"
+                              : "border-slate-200 text-slate-500 hover:border-accent/40 hover:text-accent"
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="split-self-person"
+                            checked={person.isSelf}
+                            onChange={() => setSelfPerson(person.id)}
+                            className="sr-only"
+                          />
+                          <UserCheck className="h-3.5 w-3.5" aria-hidden />
+                          <span className="hidden sm:inline">This is me</span>
+                        </label>
                         <button
                           type="button"
                           onClick={() => removeSplitPerson(person.id)}
@@ -639,11 +708,23 @@ export function ExpenseTracker() {
                       <tbody>
                         {splitShare.shares.map((share, index) => (
                           <tr key={share.id} className={index % 2 === 1 ? "bg-white/50" : undefined}>
-                            <td className="px-4 py-2 text-slate-700">{share.name}</td>
+                            <td className="px-4 py-2 text-slate-700">
+                              {share.name}
+                              {share.isSelf && <span className="text-slate-400"> (me)</span>}
+                            </td>
                             <td className="px-4 py-2 text-right font-semibold text-accent">
                               {currency.symbol}
                               {share.amount.toFixed(2)}
                             </td>
+                            {splitShare.shares.some((s) => s.isSelf) && (
+                              <td className="px-4 py-2 text-right">
+                                <span
+                                  className={`text-xs font-semibold ${share.isSelf ? "text-emerald-600" : "text-amber-600"}`}
+                                >
+                                  {share.isSelf ? "Paid" : "Pending"}
+                                </span>
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>
@@ -706,6 +787,56 @@ export function ExpenseTracker() {
                 className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900 outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
               />
             </label>
+
+            <div className="sm:col-span-2">
+              <span className="mb-1 flex items-center gap-1.5 text-sm font-medium text-slate-700">
+                <QrCode className="h-4 w-4 text-slate-400" aria-hidden />
+                UPI QR code
+              </span>
+              <p className="mb-2 text-xs text-slate-500">
+                Upload a screenshot of your UPI QR code and it&apos;ll be shown on the PDF so people can scan it to
+                pay you directly.
+              </p>
+              <input
+                ref={qrInputRef}
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  handleQrUpload(e.target.files?.[0]);
+                  e.target.value = "";
+                }}
+                className="hidden"
+              />
+              {payer.qrCodeImage ? (
+                <div className="flex items-center gap-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- a user-uploaded data: URL, not an optimizable static asset */}
+                  <img
+                    src={payer.qrCodeImage}
+                    alt="Uploaded UPI QR code"
+                    className="h-20 w-20 rounded-lg border border-slate-200 object-cover"
+                  />
+                  <button type="button" onClick={removeQrImage} className="btn-secondary !px-4 !py-2 text-sm">
+                    <Trash2 className="h-4 w-4" aria-hidden />
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => qrInputRef.current?.click()}
+                  className="btn-secondary !px-4 !py-2 text-sm"
+                >
+                  <ImageUp className="h-4 w-4" aria-hidden />
+                  Upload QR code
+                </button>
+              )}
+              {qrError && (
+                <p className="mt-2 flex items-center gap-2 text-sm text-red-600">
+                  <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
+                  {qrError}
+                </p>
+              )}
+            </div>
           </div>
         </div>
 

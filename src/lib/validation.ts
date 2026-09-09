@@ -1,5 +1,5 @@
 import type { ExpenseGroup, ExpenseLineItem, SplitPerson } from "./types";
-import { MIN_SPLIT_PEOPLE } from "./constants";
+import { MAX_QR_IMAGE_BYTES, MIN_SPLIT_PEOPLE } from "./constants";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -25,6 +25,26 @@ export function validateRecipients(raw: string): { valid: string[]; invalid: str
     else invalid.push(email);
   }
   return { valid, invalid };
+}
+
+/**
+ * Validates a UPI QR code image before it's read into a data URL: must actually be an image and
+ * under `MAX_QR_IMAGE_BYTES`, checked before ever touching localStorage or the network.
+ */
+export function isValidQrImageFile(file: File): boolean {
+  return file.type.startsWith("image/") && file.size > 0 && file.size <= MAX_QR_IMAGE_BYTES;
+}
+
+/**
+ * Validates an already-encoded QR image data URL (e.g. what comes back from the client, or what
+ * a draft/request body claims to be one) - a cheap structural + size check, not a real image
+ * decode, but enough to reject anything that isn't plausibly a small base64 image.
+ */
+export function isValidQrDataUrl(value: string): boolean {
+  if (!/^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(value)) return false;
+  // Base64 is ~4/3 the size of the original bytes; use that to bound the encoded string length
+  // rather than decoding it up front.
+  return value.length <= MAX_QR_IMAGE_BYTES * 1.4;
 }
 
 export function isPositivePrice(price: string): boolean {
@@ -80,6 +100,8 @@ export interface SplitPersonShare {
   id: string;
   name: string;
   amount: number;
+  /** True for the one person (if any) marked as "this is me" - shown as already paid. */
+  isSelf: boolean;
 }
 
 export interface SplitShare {
@@ -116,6 +138,7 @@ export function computeSplitShare(total: number, people: SplitPerson[]): SplitSh
     id: person.id,
     name: person.name.trim(),
     amount: index < extraCount ? higherAmount : baseAmount,
+    isSelf: person.isSelf,
   }));
   return {
     baseAmount,

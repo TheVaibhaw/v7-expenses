@@ -244,3 +244,11 @@ export const DEFAULT_CURRENCY =  CURRENCIES.find((c) => c.country === "India") ?
 
 /** Minimum number of people a split can be divided among (splitting 1 way is meaningless). */
 export const MIN_SPLIT_PEOPLE = 2;
+
+/**
+ * Max size for an uploaded UPI QR code image, before base64 encoding. It travels in the
+ * localStorage draft and in the email API's JSON body (as a base64 data URL, ~33% larger than
+ * this), so this is deliberately small - a QR code photo/screenshot never needs to be large to
+ * stay scannable in a PDF.
+ */
+export const MAX_QR_IMAGE_BYTES = 1_000_000;

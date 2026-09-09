@@ -3,7 +3,7 @@ import { renderToBuffer } from "@react-pdf/renderer";
 import { Resend } from "resend";
 import { ExpenseReportDocument } from "@/components/pdf/ExpenseReportDocument";
 import { registerPdfFonts } from "@/lib/pdf-fonts";
-import { validateRecipients, getValidGroups, isValidSplitCount, calculateGrandTotal } from "@/lib/validation";
+import { validateRecipients, getValidGroups, isValidQrDataUrl, isValidSplitCount, calculateGrandTotal } from "@/lib/validation";
 import { CURRENCIES, DEFAULT_CURRENCY, PAYMENT_METHODS } from "@/lib/constants";
 import type { Currency, ExpenseGroup, ExpenseLineItem, PayerDetails, SplitConfig, SplitPerson } from "@/lib/types";
 
@@ -64,12 +64,15 @@ function parseGroups(raw: unknown): ExpenseGroup[] | null {
 }
 
 function parsePayer(raw: unknown): PayerDetails {
-  if (typeof raw !== "object" || raw === null) return { phone: "", upiId: "", notes: "" };
+  if (typeof raw !== "object" || raw === null) return { phone: "", upiId: "", notes: "", qrCodeImage: null };
   const candidate = raw as Record<string, unknown>;
+  const qrCodeImage =
+    typeof candidate.qrCodeImage === "string" && isValidQrDataUrl(candidate.qrCodeImage) ? candidate.qrCodeImage : null;
   return {
     phone: typeof candidate.phone === "string" ? candidate.phone : "",
     upiId: typeof candidate.upiId === "string" ? candidate.upiId : "",
     notes: typeof candidate.notes === "string" ? candidate.notes : "",
+    qrCodeImage,
   };
 }
 
@@ -84,14 +87,15 @@ function parseSplitPerson(raw: unknown): SplitPerson | null {
   if (typeof raw !== "object" || raw === null) return null;
   const candidate = raw as Record<string, unknown>;
   if (typeof candidate.id !== "string" || typeof candidate.name !== "string") return null;
-  return { id: candidate.id, name: candidate.name };
+  return { id: candidate.id, name: candidate.name, isSelf: candidate.isSelf === true };
 }
 
 /**
  * Split state is never trusted from the client as-is: `enabled` must be a boolean and, when
  * enabled, `people` must independently pass `isValidSplitCount` server-side too (same rule the
  * UI enforces - at least MIN_SPLIT_PEOPLE non-blank names), and the grand total must be
- * positive - otherwise split is treated as off.
+ * positive - otherwise split is treated as off. At most one person keeps `isSelf: true` - if the
+ * client sent more than one (tampered or buggy request), only the first is trusted.
  */
 function parseSplit(raw: unknown, grandTotal: number): SplitConfig {
   const disabled: SplitConfig = { enabled: false, people: [] };
@@ -100,6 +104,13 @@ function parseSplit(raw: unknown, grandTotal: number): SplitConfig {
   if (candidate.enabled !== true) return disabled;
   if (!Array.isArray(candidate.people)) return disabled;
   const people = candidate.people.map(parseSplitPerson).filter((p): p is SplitPerson => p !== null);
+  let seenSelf = false;
+  for (const person of people) {
+    if (person.isSelf) {
+      if (seenSelf) person.isSelf = false;
+      seenSelf = true;
+    }
+  }
   if (!grandTotal || grandTotal <= 0) return disabled;
   if (!isValidSplitCount(people)) return disabled;
   return { enabled: true, people };

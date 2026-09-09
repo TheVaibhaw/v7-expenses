@@ -1,5 +1,6 @@
 import type { Currency, ExpenseDraft, ExpenseGroup, ExpenseLineItem, PayerDetails, SplitConfig, SplitPerson } from "./types";
 import { CURRENCIES, DEFAULT_CURRENCY, PAYMENT_METHODS } from "./constants";
+import { isValidQrDataUrl } from "./validation";
 
 const DRAFT_STORAGE_KEY = "v7-expenses:draft";
 
@@ -39,13 +40,15 @@ function sanitizeGroup(candidate: unknown): ExpenseGroup | null {
 
 function sanitizePayer(candidate: unknown): PayerDetails {
   if (typeof candidate !== "object" || candidate === null) {
-    return { phone: "", upiId: "", notes: "" };
+    return { phone: "", upiId: "", notes: "", qrCodeImage: null };
   }
   const payer = candidate as Record<string, unknown>;
+  const qrCodeImage = typeof payer.qrCodeImage === "string" && isValidQrDataUrl(payer.qrCodeImage) ? payer.qrCodeImage : null;
   return {
     phone: typeof payer.phone === "string" ? payer.phone : "",
     upiId: typeof payer.upiId === "string" ? payer.upiId : "",
     notes: typeof payer.notes === "string" ? payer.notes : "",
+    qrCodeImage,
   };
 }
 
@@ -60,13 +63,15 @@ function sanitizeSplitPerson(candidate: unknown): SplitPerson | null {
   if (typeof candidate !== "object" || candidate === null) return null;
   const person = candidate as Record<string, unknown>;
   if (typeof person.id !== "string" || typeof person.name !== "string") return null;
-  return { id: person.id, name: person.name };
+  return { id: person.id, name: person.name, isSelf: person.isSelf === true };
 }
 
 /**
  * Handles both the current shape (`people: SplitPerson[]`) and the old one from before named
  * splitting existed (`people: string`, a head-count) - an old draft's count is discarded rather
  * than guessed at as blank-named people, since a bare number can't be turned into real names.
+ * Also enforces "at most one `isSelf`" defensively, in case a corrupted/hand-edited draft has
+ * more than one - keeps the first and clears the rest, rather than trusting all of them.
  */
 function sanitizeSplit(candidate: unknown): SplitConfig {
   if (typeof candidate !== "object" || candidate === null) return { enabled: false, people: [] };
@@ -74,6 +79,13 @@ function sanitizeSplit(candidate: unknown): SplitConfig {
   const enabled = typeof split.enabled === "boolean" ? split.enabled : false;
   if (Array.isArray(split.people)) {
     const people = split.people.map(sanitizeSplitPerson).filter((p): p is SplitPerson => p !== null);
+    let seenSelf = false;
+    for (const person of people) {
+      if (person.isSelf) {
+        if (seenSelf) person.isSelf = false;
+        seenSelf = true;
+      }
+    }
     return { enabled, people };
   }
   return { enabled: false, people: [] };

@@ -26,12 +26,19 @@ export interface PayerDetails {
   phone: string;
   upiId: string;
   notes: string;
+  /** UPI QR code image, as a data URL (e.g. "data:image/png;base64,..."). Optional. */
+  qrCodeImage: string | null;
 }
 
-/** One named person the total can be split with. `name` may be blank while being edited. */
+/**
+ * One named person the total can be split with. `name` may be blank while being edited.
+ * `isSelf` marks which one person (if any) is the one who already paid the full amount - the
+ * PDF shows them as "Paid" and everyone else as "Pending". At most one person is ever `isSelf`.
+ */
 export interface SplitPerson {
   id: string;
   name: string;
+  isSelf: boolean;
 }
 
 /** Split-the-bill state: a named list of people to divide the grand total between. */
