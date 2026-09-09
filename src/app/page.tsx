@@ -1,4 +1,4 @@
-import { ExpenseTracker } from "@/components/ExpenseTracker";
+import Link from "next/link";
 import { Support } from "@/components/Support";
 import { APP_NAME } from "@/lib/constants";
 
@@ -40,10 +40,16 @@ export default function Home() {
             {APP_NAME} turns a list of items you bought into a clean, shareable record - with a
             running total and your payment details, ready to download or send by email.
           </p>
+          <div className="mt-8">
+            <Link
+              href="/tracker"
+              className="inline-flex h-11 items-center justify-center rounded-lg bg-accent px-6 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:text-base"
+            >
+              Track an expense
+            </Link>
+          </div>
         </div>
       </section>
-
-      <ExpenseTracker />
 
       <section id="faq" className="mx-auto max-w-3xl px-4 py-12 sm:px-6 sm:py-16">
         <h2 className="text-center text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">

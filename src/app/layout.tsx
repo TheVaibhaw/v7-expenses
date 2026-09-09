@@ -137,7 +137,7 @@ const jsonLd = [
         "@type": "ListItem",
         position: 2,
         name: "Expense Tracker",
-        item: `${SITE_URL}/#tracker`,
+        item: `${SITE_URL}/tracker`,
       },
     ],
   },

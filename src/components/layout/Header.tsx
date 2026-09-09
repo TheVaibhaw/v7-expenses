@@ -16,7 +16,7 @@ export function Header() {
           <span>{APP_NAME}</span>
         </Link>
         <Link
-          href="#tracker"
+          href="/tracker"
           className="inline-flex h-8 items-center justify-center rounded-lg bg-accent px-3 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:h-9 sm:px-4 sm:text-sm"
         >
           Track an expense
