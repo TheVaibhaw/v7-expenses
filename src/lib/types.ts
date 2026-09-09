@@ -28,10 +28,16 @@ export interface PayerDetails {
   notes: string;
 }
 
-/** Split-the-bill state. `people` is a string while being edited; validated before use. */
+/** One named person the total can be split with. `name` may be blank while being edited. */
+export interface SplitPerson {
+  id: string;
+  name: string;
+}
+
+/** Split-the-bill state: a named list of people to divide the grand total between. */
 export interface SplitConfig {
   enabled: boolean;
-  people: string;
+  people: SplitPerson[];
 }
 
 export interface ExpenseDraft {

@@ -1,4 +1,4 @@
-import type { Currency, ExpenseDraft, ExpenseGroup, ExpenseLineItem, PayerDetails, SplitConfig } from "./types";
+import type { Currency, ExpenseDraft, ExpenseGroup, ExpenseLineItem, PayerDetails, SplitConfig, SplitPerson } from "./types";
 import { CURRENCIES, DEFAULT_CURRENCY, PAYMENT_METHODS } from "./constants";
 
 const DRAFT_STORAGE_KEY = "v7-expenses:draft";
@@ -56,13 +56,27 @@ function sanitizeCurrency(candidate: unknown): Currency {
   return match ?? DEFAULT_CURRENCY;
 }
 
+function sanitizeSplitPerson(candidate: unknown): SplitPerson | null {
+  if (typeof candidate !== "object" || candidate === null) return null;
+  const person = candidate as Record<string, unknown>;
+  if (typeof person.id !== "string" || typeof person.name !== "string") return null;
+  return { id: person.id, name: person.name };
+}
+
+/**
+ * Handles both the current shape (`people: SplitPerson[]`) and the old one from before named
+ * splitting existed (`people: string`, a head-count) - an old draft's count is discarded rather
+ * than guessed at as blank-named people, since a bare number can't be turned into real names.
+ */
 function sanitizeSplit(candidate: unknown): SplitConfig {
-  if (typeof candidate !== "object" || candidate === null) return { enabled: false, people: "" };
+  if (typeof candidate !== "object" || candidate === null) return { enabled: false, people: [] };
   const split = candidate as Record<string, unknown>;
-  return {
-    enabled: typeof split.enabled === "boolean" ? split.enabled : false,
-    people: typeof split.people === "string" ? split.people : "",
-  };
+  const enabled = typeof split.enabled === "boolean" ? split.enabled : false;
+  if (Array.isArray(split.people)) {
+    const people = split.people.map(sanitizeSplitPerson).filter((p): p is SplitPerson => p !== null);
+    return { enabled, people };
+  }
+  return { enabled: false, people: [] };
 }
 
 /**

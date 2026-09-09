@@ -159,7 +159,37 @@ const styles = StyleSheet.create({
   splitNote: {
     fontSize: 8,
     color: "#64748b",
-    marginTop: 2,
+    marginTop: 6,
+  },
+  splitTable: {
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: "#c7d2fe",
+    borderStyle: "solid",
+    borderRadius: 4,
+    overflow: "hidden",
+  },
+  splitHeaderRow: {
+    flexDirection: "row",
+    backgroundColor: "#4f46e5",
+  },
+  splitRow: {
+    flexDirection: "row",
+    borderTop: "1px solid #e0e7ff",
+  },
+  splitRowAlt: {
+    flexDirection: "row",
+    borderTop: "1px solid #e0e7ff",
+    backgroundColor: "#f5f7ff",
+  },
+  splitCellName: {
+    width: "70%",
+    padding: 6,
+  },
+  splitCellAmount: {
+    width: "30%",
+    padding: 6,
+    textAlign: "right",
   },
   section: {
     marginTop: 20,
@@ -235,8 +265,7 @@ export function ExpenseReportDocument({ groups, payer, currency, split, generate
   const created = generatedAt ?? new Date();
   const symbol = currency.symbol;
 
-  const splitShare =
-    split?.enabled ? computeSplitShare(grandTotal, Number(split.people)) : null;
+  const splitShare = split?.enabled ? computeSplitShare(grandTotal, split.people) : null;
 
   return (
     <Document title="Expense Report" author={APP_NAME}>
@@ -314,28 +343,37 @@ export function ExpenseReportDocument({ groups, payer, currency, split, generate
 
           {splitShare && (
             <View style={styles.splitBox}>
-              <Text style={styles.splitTitle}>Split Summary</Text>
-              {splitShare.extraCount === 0 ? (
-                <Text style={styles.splitLine}>
-                  Total: {formatCurrency(splitShare.total, symbol)} &middot; Split {splitShare.people} ways &middot;{" "}
-                  {formatCurrency(splitShare.baseAmount, symbol)} per person
+              <Text style={styles.splitTitle}>
+                Split Summary &middot; {formatCurrency(splitShare.total, symbol)} &middot; {splitShare.people} people
+              </Text>
+
+              <View style={styles.splitTable}>
+                <View style={styles.splitHeaderRow}>
+                  <View style={styles.splitCellName}>
+                    <Text style={styles.headerCellText}>Person</Text>
+                  </View>
+                  <View style={styles.splitCellAmount}>
+                    <Text style={styles.headerCellText}>Amount owed</Text>
+                  </View>
+                </View>
+                {splitShare.shares.map((share, index) => (
+                  <View key={share.id} style={index % 2 === 1 ? styles.splitRowAlt : styles.splitRow}>
+                    <View style={styles.splitCellName}>
+                      <Text>{share.name}</Text>
+                    </View>
+                    <View style={styles.splitCellAmount}>
+                      <Text>{formatCurrency(share.amount, symbol)}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+
+              {splitShare.extraCount > 0 && (
+                <Text style={styles.splitNote}>
+                  The total doesn&apos;t divide evenly, so {splitShare.extraCount}{" "}
+                  {splitShare.extraCount === 1 ? "person pays" : "people pay"} one paisa/cent more than the rest -
+                  shares always sum exactly to the total.
                 </Text>
-              ) : (
-                <>
-                  <Text style={styles.splitLine}>
-                    Total: {formatCurrency(splitShare.total, symbol)} &middot; Split {splitShare.people} ways
-                  </Text>
-                  <Text style={styles.splitLine}>
-                    {splitShare.extraCount} person{splitShare.extraCount === 1 ? "" : "s"} pay{" "}
-                    {formatCurrency(splitShare.higherAmount, symbol)}, {splitShare.people - splitShare.extraCount}{" "}
-                    person{splitShare.people - splitShare.extraCount === 1 ? "" : "s"} pay{" "}
-                    {formatCurrency(splitShare.baseAmount, symbol)}
-                  </Text>
-                  <Text style={styles.splitNote}>
-                    The total doesn&apos;t divide evenly, so the leftover has been distributed one unit at a time
-                    rather than rounded away - shares sum exactly to the total.
-                  </Text>
-                </>
               )}
             </View>
           )}

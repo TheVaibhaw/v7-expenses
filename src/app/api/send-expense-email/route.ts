@@ -5,7 +5,7 @@ import { ExpenseReportDocument } from "@/components/pdf/ExpenseReportDocument";
 import { registerPdfFonts } from "@/lib/pdf-fonts";
 import { validateRecipients, getValidGroups, isValidSplitCount, calculateGrandTotal } from "@/lib/validation";
 import { CURRENCIES, DEFAULT_CURRENCY, PAYMENT_METHODS } from "@/lib/constants";
-import type { Currency, ExpenseGroup, ExpenseLineItem, PayerDetails, SplitConfig } from "@/lib/types";
+import type { Currency, ExpenseGroup, ExpenseLineItem, PayerDetails, SplitConfig, SplitPerson } from "@/lib/types";
 
 // Resend's SDK and @react-pdf/renderer's Node rendering APIs need the Node.js runtime,
 // not the Edge runtime.
@@ -80,21 +80,29 @@ function parseCurrency(raw: unknown): Currency {
   return match ?? DEFAULT_CURRENCY;
 }
 
+function parseSplitPerson(raw: unknown): SplitPerson | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const candidate = raw as Record<string, unknown>;
+  if (typeof candidate.id !== "string" || typeof candidate.name !== "string") return null;
+  return { id: candidate.id, name: candidate.name };
+}
+
 /**
  * Split state is never trusted from the client as-is: `enabled` must be a boolean and, when
  * enabled, `people` must independently pass `isValidSplitCount` server-side too (same rule the
- * UI enforces), and the grand total must be positive - otherwise split is treated as off.
+ * UI enforces - at least MIN_SPLIT_PEOPLE non-blank names), and the grand total must be
+ * positive - otherwise split is treated as off.
  */
 function parseSplit(raw: unknown, grandTotal: number): SplitConfig {
-  const disabled: SplitConfig = { enabled: false, people: "" };
+  const disabled: SplitConfig = { enabled: false, people: [] };
   if (typeof raw !== "object" || raw === null) return disabled;
   const candidate = raw as Record<string, unknown>;
   if (candidate.enabled !== true) return disabled;
-  const peopleRaw = candidate.people;
-  const peopleStr = typeof peopleRaw === "string" ? peopleRaw : typeof peopleRaw === "number" ? String(peopleRaw) : "";
+  if (!Array.isArray(candidate.people)) return disabled;
+  const people = candidate.people.map(parseSplitPerson).filter((p): p is SplitPerson => p !== null);
   if (!grandTotal || grandTotal <= 0) return disabled;
-  if (!isValidSplitCount(peopleStr)) return disabled;
-  return { enabled: true, people: peopleStr };
+  if (!isValidSplitCount(people)) return disabled;
+  return { enabled: true, people };
 }
 
 export async function POST(request: Request) {

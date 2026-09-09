@@ -1,4 +1,4 @@
-import type { ExpenseGroup, ExpenseLineItem } from "./types";
+import type { ExpenseGroup, ExpenseLineItem, SplitPerson } from "./types";
 import { MIN_SPLIT_PEOPLE } from "./constants";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -62,10 +62,24 @@ export function calculateGrandTotal(groups: ExpenseGroup[]): number {
   return getValidGroups(groups).reduce((sum, group) => sum + calculateGroupTotal(group), 0);
 }
 
-/** Number of people a total can be split among: a positive integer of at least MIN_SPLIT_PEOPLE. */
-export function isValidSplitCount(value: string | number): boolean {
-  const num = typeof value === "number" ? value : Number(value);
-  return Number.isInteger(num) && num >= MIN_SPLIT_PEOPLE;
+/** A split person counts once they have a non-empty (trimmed) name. */
+export function isSplitPersonComplete(person: SplitPerson): boolean {
+  return person.name.trim().length > 0;
+}
+
+export function getValidSplitPeople(people: SplitPerson[]): SplitPerson[] {
+  return people.filter(isSplitPersonComplete);
+}
+
+/** A total can be split once at least MIN_SPLIT_PEOPLE named people are present. */
+export function isValidSplitCount(people: SplitPerson[]): boolean {
+  return getValidSplitPeople(people).length >= MIN_SPLIT_PEOPLE;
+}
+
+export interface SplitPersonShare {
+  id: string;
+  name: string;
+  amount: number;
 }
 
 export interface SplitShare {
@@ -79,24 +93,36 @@ export interface SplitShare {
   people: number;
   /** Sum of all shares - always exactly equal to the (rounded-to-cents) total. */
   total: number;
+  /** Per-person breakdown, in the order the people were entered. */
+  shares: SplitPersonShare[];
 }
 
 /**
- * Splits `total` equally among `people`, distributing any leftover paisa/cent to the first
- * `extraCount` people (who each pay one currency-minor-unit more) so the shares always sum
+ * Splits `total` equally among the named `people`, distributing any leftover paisa/cent to the
+ * first `extraCount` people (who each pay one currency-minor-unit more) so the shares always sum
  * exactly to the total, rather than silently losing a cent to rounding (e.g. ₹100 / 3 people:
  * 2 people pay ₹33.34, 1 person pays ₹33.33 - not "everyone pays ₹33.33, ₹0.01 short").
  */
-export function computeSplitShare(total: number, people: number): SplitShare | null {
+export function computeSplitShare(total: number, people: SplitPerson[]): SplitShare | null {
+  const validPeople = getValidSplitPeople(people);
   if (!isValidSplitCount(people) || !(total > 0)) return null;
+  const count = validPeople.length;
   const totalMinorUnits = Math.round(total * 100);
-  const baseMinorUnits = Math.floor(totalMinorUnits / people);
-  const extraCount = totalMinorUnits - baseMinorUnits * people;
+  const baseMinorUnits = Math.floor(totalMinorUnits / count);
+  const extraCount = totalMinorUnits - baseMinorUnits * count;
+  const baseAmount = baseMinorUnits / 100;
+  const higherAmount = (baseMinorUnits + 1) / 100;
+  const shares: SplitPersonShare[] = validPeople.map((person, index) => ({
+    id: person.id,
+    name: person.name.trim(),
+    amount: index < extraCount ? higherAmount : baseAmount,
+  }));
   return {
-    baseAmount: baseMinorUnits / 100,
-    higherAmount: (baseMinorUnits + 1) / 100,
+    baseAmount,
+    higherAmount,
     extraCount,
-    people,
+    people: count,
     total: totalMinorUnits / 100,
+    shares,
   };
 }

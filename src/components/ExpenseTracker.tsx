@@ -17,13 +17,14 @@ import {
 } from "lucide-react";
 import { AUTOSAVE_DEBOUNCE_MS, CURRENCIES, DEFAULT_CURRENCY, MIN_SPLIT_PEOPLE, PAYMENT_METHODS } from "@/lib/constants";
 import { loadDraft, saveDraft } from "@/lib/storage";
-import type { Currency, ExpenseGroup, ExpenseLineItem, PayerDetails, SplitConfig } from "@/lib/types";
+import type { Currency, ExpenseGroup, ExpenseLineItem, PayerDetails, SplitConfig, SplitPerson } from "@/lib/types";
 import {
   calculateGrandTotal,
   calculateGroupTotal,
   computeSplitShare,
   getValidGroups,
   getValidLineItems,
+  getValidSplitPeople,
   isValidSplitCount,
   validateRecipients,
 } from "@/lib/validation";
@@ -50,8 +51,12 @@ function createEmptyGroup(name = ""): ExpenseGroup {
   return { id: randomId(), name, items: [createEmptyLineItem()] };
 }
 
+function createEmptySplitPerson(): SplitPerson {
+  return { id: randomId(), name: "" };
+}
+
 const EMPTY_PAYER: PayerDetails = { phone: "", upiId: "", notes: "" };
-const EMPTY_SPLIT: SplitConfig = { enabled: false, people: "" };
+const EMPTY_SPLIT: SplitConfig = { enabled: false, people: [] };
 
 type SendState =
   | { status: "idle" }
@@ -148,6 +153,30 @@ export function ExpenseTracker() {
     setGroups((prev) => (prev.length === 1 ? prev : prev.filter((group) => group.id !== groupId)));
   }, []);
 
+  const addSplitPerson = useCallback(() => {
+    setSplit((prev) => ({ ...prev, people: [...prev.people, createEmptySplitPerson()] }));
+  }, []);
+
+  const updateSplitPersonName = useCallback((personId: string, name: string) => {
+    setSplit((prev) => ({
+      ...prev,
+      people: prev.people.map((person) => (person.id === personId ? { ...person, name } : person)),
+    }));
+  }, []);
+
+  const removeSplitPerson = useCallback((personId: string) => {
+    setSplit((prev) => ({ ...prev, people: prev.people.filter((person) => person.id !== personId) }));
+  }, []);
+
+  const toggleSplitEnabled = useCallback((enabled: boolean) => {
+    setSplit((prev) => ({
+      // Seed with two blank rows the first time split is turned on, so the user isn't staring
+      // at an empty list with nothing to fill in.
+      people: enabled && prev.people.length === 0 ? [createEmptySplitPerson(), createEmptySplitPerson()] : prev.people,
+      enabled,
+    }));
+  }, []);
+
   const handleDownload = useCallback(async () => {
     setDownloadState("generating");
     setDownloadError(null);
@@ -206,14 +235,15 @@ export function ExpenseTracker() {
     }
   }, [groups, payer, currency, split, recipientPreview, recipientInvalidPreview]);
 
-  // Split validation: number of people must be an integer >= MIN_SPLIT_PEOPLE, and the split
+  // Split validation: at least MIN_SPLIT_PEOPLE people need a non-blank name, and the split
   // option only makes sense once there's a positive grand total.
-  const splitPeopleTouched = split.people.trim().length > 0;
+  const validSplitPeople = useMemo(() => getValidSplitPeople(split.people), [split.people]);
+  const splitPeopleTouched = split.people.some((p) => p.name.trim().length > 0);
   const splitCountValid = !splitPeopleTouched || isValidSplitCount(split.people);
-  const splitShare = split.enabled && grandTotal > 0 ? computeSplitShare(grandTotal, Number(split.people)) : null;
+  const splitShare = split.enabled && grandTotal > 0 ? computeSplitShare(grandTotal, split.people) : null;
   const splitErrorMessage =
     split.enabled && splitPeopleTouched && !splitCountValid
-      ? `Number of people must be a whole number of at least ${MIN_SPLIT_PEOPLE}.`
+      ? `Name at least ${MIN_SPLIT_PEOPLE} people to split between (${validSplitPeople.length} named so far).`
       : null;
 
   const fadeUp = reduceMotion
@@ -539,7 +569,7 @@ export function ExpenseTracker() {
                 type="checkbox"
                 checked={split.enabled}
                 disabled={grandTotal <= 0}
-                onChange={(e) => setSplit((prev) => ({ ...prev, enabled: e.target.checked }))}
+                onChange={(e) => toggleSplitEnabled(e.target.checked)}
                 className="h-4 w-4 rounded border-slate-300 text-accent focus:ring-accent/30"
               />
               <Users className="h-4 w-4 text-slate-400" aria-hidden />
@@ -553,23 +583,41 @@ export function ExpenseTracker() {
 
             {split.enabled && grandTotal > 0 && (
               <div className="mt-3">
-                <label className="block text-sm sm:max-w-xs">
-                  <span className="mb-1 block font-medium text-slate-700">Number of people</span>
-                  <input
-                    type="number"
-                    min={MIN_SPLIT_PEOPLE}
-                    step="1"
-                    value={split.people}
-                    onChange={(e) => setSplit((prev) => ({ ...prev, people: e.target.value }))}
-                    placeholder={String(MIN_SPLIT_PEOPLE)}
-                    aria-invalid={Boolean(splitErrorMessage)}
-                    className={`w-full rounded-lg border bg-white px-3 py-2 text-slate-900 outline-none focus:ring-2 ${
-                      splitErrorMessage
-                        ? "border-red-300 focus:border-red-400 focus:ring-red-100"
-                        : "border-slate-200 focus:border-accent focus:ring-accent/20"
-                    }`}
-                  />
-                </label>
+                <span className="mb-1 block text-sm font-medium text-slate-700">Split between</span>
+                <p className="mb-2 text-xs text-slate-500">
+                  Name at least {MIN_SPLIT_PEOPLE} people - each gets an equal share of the grand total.
+                </p>
+
+                <div className="space-y-2">
+                  <AnimatePresence initial={false}>
+                    {split.people.map((person, index) => (
+                      <motion.div key={person.id} {...fadeUp} transition={{ duration: 0.2 }} className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={person.name}
+                          onChange={(e) => updateSplitPersonName(person.id, e.target.value)}
+                          placeholder={`Person ${index + 1} name`}
+                          className="w-full max-w-sm rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900 outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeSplitPerson(person.id)}
+                          disabled={split.people.length === 1}
+                          aria-label="Remove person"
+                          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 disabled:pointer-events-none disabled:opacity-30"
+                        >
+                          <Trash2 className="h-4 w-4" aria-hidden />
+                        </button>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                </div>
+
+                <button type="button" onClick={addSplitPerson} className="btn-secondary !px-4 !py-2 mt-3 text-sm">
+                  <Plus className="h-4 w-4" aria-hidden />
+                  Add person
+                </button>
+
                 {splitErrorMessage && (
                   <p className="mt-2 flex items-center gap-2 text-sm text-red-600">
                     <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
@@ -578,41 +626,35 @@ export function ExpenseTracker() {
                 )}
 
                 {splitShare && (
-                  <div className="mt-4 rounded-xl border border-accent/20 bg-accent-soft p-4">
-                    <h3 className="text-sm font-semibold text-slate-900">Split Summary</h3>
-                    {splitShare.extraCount === 0 ? (
-                      <p className="mt-1 text-sm text-slate-700">
-                        Total: {currency.symbol}
-                        {splitShare.total.toFixed(2)} &middot; Split {splitShare.people} ways &middot;{" "}
-                        <span className="font-semibold text-accent">
-                          {currency.symbol}
-                          {splitShare.baseAmount.toFixed(2)} per person
-                        </span>
+                  <div className="mt-4 overflow-hidden rounded-xl border border-accent/20 bg-accent-soft">
+                    <div className="flex items-center justify-between px-4 pt-4">
+                      <h3 className="text-sm font-semibold text-slate-900">Split Summary</h3>
+                      <span className="text-xs font-medium text-slate-500">
+                        {currency.symbol}
+                        {splitShare.total.toFixed(2)} &middot; {splitShare.people} people
+                      </span>
+                    </div>
+
+                    <table className="mt-3 w-full text-sm">
+                      <tbody>
+                        {splitShare.shares.map((share, index) => (
+                          <tr key={share.id} className={index % 2 === 1 ? "bg-white/50" : undefined}>
+                            <td className="px-4 py-2 text-slate-700">{share.name}</td>
+                            <td className="px-4 py-2 text-right font-semibold text-accent">
+                              {currency.symbol}
+                              {share.amount.toFixed(2)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    {splitShare.extraCount > 0 && (
+                      <p className="border-t border-accent/20 px-4 py-2 text-xs text-slate-500">
+                        The total doesn&apos;t divide evenly, so {splitShare.extraCount}{" "}
+                        {splitShare.extraCount === 1 ? "person pays" : "people pay"} one paisa/cent more than the
+                        rest - shares always add up exactly to the total.
                       </p>
-                    ) : (
-                      <>
-                        <p className="mt-1 text-sm text-slate-700">
-                          Total: {currency.symbol}
-                          {splitShare.total.toFixed(2)} &middot; Split {splitShare.people} ways
-                        </p>
-                        <p className="mt-1 text-sm text-slate-700">
-                          {splitShare.extraCount} person{splitShare.extraCount === 1 ? "" : "s"} pay{" "}
-                          <span className="font-semibold text-accent">
-                            {currency.symbol}
-                            {splitShare.higherAmount.toFixed(2)}
-                          </span>
-                          , {splitShare.people - splitShare.extraCount} person
-                          {splitShare.people - splitShare.extraCount === 1 ? "" : "s"} pay{" "}
-                          <span className="font-semibold text-accent">
-                            {currency.symbol}
-                            {splitShare.baseAmount.toFixed(2)}
-                          </span>
-                        </p>
-                        <p className="mt-2 text-xs text-slate-500">
-                          The total doesn&apos;t divide evenly, so the extra paisa/cent is distributed to a few people
-                          instead of being rounded away - shares always add up exactly to the total.
-                        </p>
-                      </>
                     )}
                   </div>
                 )}
