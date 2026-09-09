@@ -1,4 +1,4 @@
-import type { ExpenseLineItem, PayerDetails } from "./types";
+import type { Currency, ExpenseGroup, PayerDetails, SplitConfig } from "./types";
 
 export type PdfGenerationResult =
   | { status: "success"; blob: Blob }
@@ -13,16 +13,23 @@ const GENERIC_ERROR_MESSAGE = "Something went wrong while generating your PDF. P
  * `renderToBuffer` instead, which is the Node-only counterpart.
  */
 export async function generateExpensePdf(
-  items: ExpenseLineItem[],
+  groups: ExpenseGroup[],
   payer: PayerDetails,
+  currency: Currency,
+  split: SplitConfig,
 ): Promise<PdfGenerationResult> {
   try {
-    const [{ pdf }, { ExpenseReportDocument }] = await Promise.all([
+    const [{ pdf }, { ExpenseReportDocument }, { registerPdfFonts }] = await Promise.all([
       import("@react-pdf/renderer"),
       import("@/components/pdf/ExpenseReportDocument"),
+      import("@/lib/pdf-fonts"),
     ]);
 
-    const blob = await pdf(<ExpenseReportDocument items={items} payer={payer} />).toBlob();
+    registerPdfFonts();
+
+    const blob = await pdf(
+      <ExpenseReportDocument groups={groups} payer={payer} currency={currency} split={split} />,
+    ).toBlob();
 
     if (!blob || blob.size === 0) {
       return { status: "error", message: GENERIC_ERROR_MESSAGE };

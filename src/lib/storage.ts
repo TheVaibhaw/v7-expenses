@@ -1,10 +1,14 @@
-import type { ExpenseDraft, ExpenseLineItem, PayerDetails } from "./types";
-import { PAYMENT_METHODS } from "./constants";
+import type { Currency, ExpenseDraft, ExpenseGroup, ExpenseLineItem, PayerDetails, SplitConfig } from "./types";
+import { CURRENCIES, DEFAULT_CURRENCY, PAYMENT_METHODS } from "./constants";
 
 const DRAFT_STORAGE_KEY = "v7-expenses:draft";
 
 function isPaymentMethod(value: unknown): value is (typeof PAYMENT_METHODS)[number] {
   return typeof value === "string" && (PAYMENT_METHODS as readonly string[]).includes(value);
+}
+
+function randomId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
 
 function sanitizeLineItem(candidate: unknown): ExpenseLineItem | null {
@@ -23,6 +27,16 @@ function sanitizeLineItem(candidate: unknown): ExpenseLineItem | null {
   };
 }
 
+function sanitizeGroup(candidate: unknown): ExpenseGroup | null {
+  if (typeof candidate !== "object" || candidate === null) return null;
+  const group = candidate as Record<string, unknown>;
+  if (typeof group.id !== "string" || typeof group.name !== "string") return null;
+  const items = Array.isArray(group.items)
+    ? group.items.map(sanitizeLineItem).filter((item): item is ExpenseLineItem => item !== null)
+    : [];
+  return { id: group.id, name: group.name, items };
+}
+
 function sanitizePayer(candidate: unknown): PayerDetails {
   if (typeof candidate !== "object" || candidate === null) {
     return { phone: "", upiId: "", notes: "" };
@@ -35,10 +49,28 @@ function sanitizePayer(candidate: unknown): PayerDetails {
   };
 }
 
+function sanitizeCurrency(candidate: unknown): Currency {
+  if (typeof candidate !== "object" || candidate === null) return DEFAULT_CURRENCY;
+  const currency = candidate as Record<string, unknown>;
+  const match = CURRENCIES.find((c) => c.code === currency.code);
+  return match ?? DEFAULT_CURRENCY;
+}
+
+function sanitizeSplit(candidate: unknown): SplitConfig {
+  if (typeof candidate !== "object" || candidate === null) return { enabled: false, people: "" };
+  const split = candidate as Record<string, unknown>;
+  return {
+    enabled: typeof split.enabled === "boolean" ? split.enabled : false,
+    people: typeof split.people === "string" ? split.people : "",
+  };
+}
+
 /**
  * Loads and validates the saved draft. Returns null for a missing or structurally invalid
  * draft rather than throwing - a bad localStorage value should never crash the app, it should
- * just fall back to starting fresh.
+ * just fall back to starting fresh. Also handles migrating away from the old flat `items` shape
+ * (pre-groups) that may still be sitting in a returning user's browser: it gets wrapped into a
+ * single default group rather than crashing or silently losing their data.
  */
 export function loadDraft(): ExpenseDraft | null {
   if (typeof window === "undefined") return null;
@@ -47,11 +79,25 @@ export function loadDraft(): ExpenseDraft | null {
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return null;
-    const candidate = parsed as { items?: unknown; payer?: unknown };
-    const items = Array.isArray(candidate.items)
-      ? candidate.items.map(sanitizeLineItem).filter((item): item is ExpenseLineItem => item !== null)
-      : [];
-    return { items, payer: sanitizePayer(candidate.payer) };
+    const candidate = parsed as { groups?: unknown; items?: unknown; payer?: unknown; currency?: unknown; split?: unknown };
+
+    let groups: ExpenseGroup[];
+    if (Array.isArray(candidate.groups)) {
+      groups = candidate.groups.map(sanitizeGroup).filter((group): group is ExpenseGroup => group !== null);
+    } else if (Array.isArray(candidate.items)) {
+      // Old shape: a flat items array from before groups existed. Migrate into one group.
+      const items = candidate.items.map(sanitizeLineItem).filter((item): item is ExpenseLineItem => item !== null);
+      groups = items.length > 0 ? [{ id: randomId(), name: "Expenses", items }] : [];
+    } else {
+      groups = [];
+    }
+
+    return {
+      groups,
+      payer: sanitizePayer(candidate.payer),
+      currency: sanitizeCurrency(candidate.currency),
+      split: sanitizeSplit(candidate.split),
+    };
   } catch {
     return null;
   }

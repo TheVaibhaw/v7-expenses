@@ -17,7 +17,7 @@ const FAQS = [
   },
   {
     q: "What currency does the PDF use?",
-    a: "Amounts are shown in Indian Rupees (INR / ₹) by default, matching common use cases like UPI payments.",
+    a: "Indian Rupees (INR / ₹) by default, but you can switch to USD, EUR, or GBP from the currency selector - it updates the on-screen totals, the downloaded PDF, and the emailed copy.",
   },
 ];
 

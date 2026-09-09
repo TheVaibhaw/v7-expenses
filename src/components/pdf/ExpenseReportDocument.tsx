@@ -1,13 +1,16 @@
 import { Document, Page, Text, View, StyleSheet } from "@react-pdf/renderer";
-import type { ExpenseLineItem, PayerDetails } from "@/lib/types";
-import { APP_NAME, CURRENCY_SYMBOL } from "@/lib/constants";
-import { calculateTotal, getValidLineItems } from "@/lib/validation";
+import type { Currency, ExpenseGroup, PayerDetails, SplitConfig } from "@/lib/types";
+import { APP_NAME } from "@/lib/constants";
+import { calculateGroupTotal, calculateGrandTotal, computeSplitShare, getValidGroups, getValidLineItems } from "@/lib/validation";
+import { PDF_FONT_FAMILY, registerPdfFonts } from "@/lib/pdf-fonts";
+
+registerPdfFonts();
 
 const styles = StyleSheet.create({
   page: {
     padding: 36,
     fontSize: 10,
-    fontFamily: "Helvetica",
+    fontFamily: PDF_FONT_FAMILY,
     color: "#0f172a",
   },
   header: {
@@ -39,8 +42,25 @@ const styles = StyleSheet.create({
     color: "#64748b",
     textAlign: "right",
   },
+  groupSection: {
+    marginTop: 18,
+  },
+  groupTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  groupTitle: {
+    fontSize: 12,
+    fontWeight: 700,
+    color: "#4f46e5",
+  },
+  groupSubtotalLabel: {
+    fontSize: 9,
+    color: "#64748b",
+  },
   table: {
-    marginTop: 8,
     borderWidth: 1,
     borderColor: "#cbd5e1",
     borderStyle: "solid",
@@ -55,6 +75,11 @@ const styles = StyleSheet.create({
   tableRowAlt: {
     flexDirection: "row",
     backgroundColor: "#f8fafc",
+  },
+  subtotalRow: {
+    flexDirection: "row",
+    backgroundColor: "#eef2ff",
+    borderTop: "1px solid #c7d2fe",
   },
   totalRow: {
     flexDirection: "row",
@@ -91,8 +116,53 @@ const styles = StyleSheet.create({
     fontWeight: 700,
     textAlign: "right",
   },
+  grandTotalSection: {
+    marginTop: 20,
+    borderWidth: 1,
+    borderColor: "#4f46e5",
+    borderStyle: "solid",
+    borderRadius: 4,
+    padding: 12,
+    backgroundColor: "#eef2ff",
+  },
+  grandTotalRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  grandTotalLabel: {
+    fontSize: 12,
+    fontWeight: 700,
+    color: "#0f172a",
+  },
+  grandTotalValue: {
+    fontSize: 16,
+    fontWeight: 700,
+    color: "#4f46e5",
+  },
+  splitBox: {
+    marginTop: 10,
+    borderTop: "1px solid #c7d2fe",
+    paddingTop: 10,
+  },
+  splitTitle: {
+    fontSize: 10,
+    fontWeight: 700,
+    color: "#4f46e5",
+    marginBottom: 4,
+  },
+  splitLine: {
+    fontSize: 9,
+    color: "#334155",
+    marginBottom: 2,
+  },
+  splitNote: {
+    fontSize: 8,
+    color: "#64748b",
+    marginTop: 2,
+  },
   section: {
-    marginTop: 24,
+    marginTop: 20,
   },
   sectionTitle: {
     fontSize: 11,
@@ -134,8 +204,8 @@ const styles = StyleSheet.create({
   },
 });
 
-function formatCurrency(value: number): string {
-  return `${CURRENCY_SYMBOL}${value.toFixed(2)}`;
+function formatCurrency(value: number, symbol: string): string {
+  return `${symbol}${value.toFixed(2)}`;
 }
 
 function formatDateTime(value: string): string {
@@ -151,21 +221,27 @@ function formatDateTime(value: string): string {
 }
 
 export interface ExpenseReportDocumentProps {
-  items: ExpenseLineItem[];
+  groups: ExpenseGroup[];
   payer: PayerDetails;
+  currency: Currency;
+  split?: SplitConfig;
   generatedAt?: Date;
 }
 
-export function ExpenseReportDocument({ items, payer, generatedAt }: ExpenseReportDocumentProps) {
-  const validItems = getValidLineItems(items);
-  const total = calculateTotal(items);
+export function ExpenseReportDocument({ groups, payer, currency, split, generatedAt }: ExpenseReportDocumentProps) {
+  const validGroups = getValidGroups(groups);
+  const grandTotal = calculateGrandTotal(groups);
   const hasPayerDetails = Boolean(payer.phone.trim() || payer.upiId.trim() || payer.notes.trim());
   const created = generatedAt ?? new Date();
+  const symbol = currency.symbol;
+
+  const splitShare =
+    split?.enabled ? computeSplitShare(grandTotal, Number(split.people)) : null;
 
   return (
     <Document title="Expense Report" author={APP_NAME}>
-      <Page size="A4" style={styles.page}>
-        <View style={styles.header}>
+      <Page size="A4" style={styles.page} wrap>
+        <View style={styles.header} fixed>
           <View>
             <Text style={styles.brand}>{APP_NAME}</Text>
             <Text style={styles.brandSub}>expenses.thev7ninja.in</Text>
@@ -176,47 +252,97 @@ export function ExpenseReportDocument({ items, payer, generatedAt }: ExpenseRepo
           </View>
         </View>
 
-        <View style={styles.table}>
-          <View style={styles.tableHeaderRow}>
-            <View style={[styles.cell, styles.colDescription]}>
-              <Text style={styles.headerCellText}>Item</Text>
+        {validGroups.map((group) => {
+          const validItems = getValidLineItems(group.items);
+          const groupTotal = calculateGroupTotal(group);
+          return (
+            <View key={group.id} style={styles.groupSection} wrap={false}>
+              <View style={styles.groupTitleRow}>
+                <Text style={styles.groupTitle}>{group.name}</Text>
+                <Text style={styles.groupSubtotalLabel}>
+                  {validItems.length} item{validItems.length === 1 ? "" : "s"}
+                </Text>
+              </View>
+
+              <View style={styles.table}>
+                <View style={styles.tableHeaderRow}>
+                  <View style={[styles.cell, styles.colDescription]}>
+                    <Text style={styles.headerCellText}>Item</Text>
+                  </View>
+                  <View style={[styles.cell, styles.colMethod]}>
+                    <Text style={styles.headerCellText}>Payment Method</Text>
+                  </View>
+                  <View style={[styles.cell, styles.colDate]}>
+                    <Text style={styles.headerCellText}>Date &amp; Time</Text>
+                  </View>
+                  <View style={[styles.cellLast, styles.colPrice]}>
+                    <Text style={styles.headerCellText}>Price</Text>
+                  </View>
+                </View>
+
+                {validItems.map((item, index) => (
+                  <View key={item.id} style={index % 2 === 1 ? styles.tableRowAlt : styles.tableRow}>
+                    <View style={[styles.cell, styles.colDescription]}>
+                      <Text>{item.description}</Text>
+                    </View>
+                    <View style={[styles.cell, styles.colMethod]}>
+                      <Text>{item.paymentMethod}</Text>
+                    </View>
+                    <View style={[styles.cell, styles.colDate]}>
+                      <Text>{formatDateTime(item.purchasedAt)}</Text>
+                    </View>
+                    <View style={[styles.cellLast, styles.colPrice]}>
+                      <Text>{formatCurrency(Number(item.price), symbol)}</Text>
+                    </View>
+                  </View>
+                ))}
+
+                <View style={styles.subtotalRow}>
+                  <Text style={styles.totalLabel}>Subtotal - {group.name}</Text>
+                  <Text style={styles.totalValue}>{formatCurrency(groupTotal, symbol)}</Text>
+                </View>
+              </View>
             </View>
-            <View style={[styles.cell, styles.colMethod]}>
-              <Text style={styles.headerCellText}>Payment Method</Text>
-            </View>
-            <View style={[styles.cell, styles.colDate]}>
-              <Text style={styles.headerCellText}>Date &amp; Time</Text>
-            </View>
-            <View style={[styles.cellLast, styles.colPrice]}>
-              <Text style={styles.headerCellText}>Price</Text>
-            </View>
+          );
+        })}
+
+        <View style={styles.grandTotalSection} wrap={false}>
+          <View style={styles.grandTotalRow}>
+            <Text style={styles.grandTotalLabel}>Grand Total ({validGroups.length} group{validGroups.length === 1 ? "" : "s"})</Text>
+            <Text style={styles.grandTotalValue}>{formatCurrency(grandTotal, symbol)}</Text>
           </View>
 
-          {validItems.map((item, index) => (
-            <View key={item.id} style={index % 2 === 1 ? styles.tableRowAlt : styles.tableRow}>
-              <View style={[styles.cell, styles.colDescription]}>
-                <Text>{item.description}</Text>
-              </View>
-              <View style={[styles.cell, styles.colMethod]}>
-                <Text>{item.paymentMethod}</Text>
-              </View>
-              <View style={[styles.cell, styles.colDate]}>
-                <Text>{formatDateTime(item.purchasedAt)}</Text>
-              </View>
-              <View style={[styles.cellLast, styles.colPrice]}>
-                <Text>{formatCurrency(Number(item.price))}</Text>
-              </View>
+          {splitShare && (
+            <View style={styles.splitBox}>
+              <Text style={styles.splitTitle}>Split Summary</Text>
+              {splitShare.extraCount === 0 ? (
+                <Text style={styles.splitLine}>
+                  Total: {formatCurrency(splitShare.total, symbol)} &middot; Split {splitShare.people} ways &middot;{" "}
+                  {formatCurrency(splitShare.baseAmount, symbol)} per person
+                </Text>
+              ) : (
+                <>
+                  <Text style={styles.splitLine}>
+                    Total: {formatCurrency(splitShare.total, symbol)} &middot; Split {splitShare.people} ways
+                  </Text>
+                  <Text style={styles.splitLine}>
+                    {splitShare.extraCount} person{splitShare.extraCount === 1 ? "" : "s"} pay{" "}
+                    {formatCurrency(splitShare.higherAmount, symbol)}, {splitShare.people - splitShare.extraCount}{" "}
+                    person{splitShare.people - splitShare.extraCount === 1 ? "" : "s"} pay{" "}
+                    {formatCurrency(splitShare.baseAmount, symbol)}
+                  </Text>
+                  <Text style={styles.splitNote}>
+                    The total doesn&apos;t divide evenly, so the leftover has been distributed one unit at a time
+                    rather than rounded away - shares sum exactly to the total.
+                  </Text>
+                </>
+              )}
             </View>
-          ))}
-
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Total</Text>
-            <Text style={styles.totalValue}>{formatCurrency(total)}</Text>
-          </View>
+          )}
         </View>
 
         {hasPayerDetails && (
-          <View style={styles.section}>
+          <View style={styles.section} wrap={false}>
             <Text style={styles.sectionTitle}>Payment Details</Text>
             <View style={styles.detailsBox}>
               {payer.phone.trim() && (
@@ -243,7 +369,7 @@ export function ExpenseReportDocument({ items, payer, generatedAt }: ExpenseRepo
 
         <View style={styles.footer} fixed>
           <Text>Generated with {APP_NAME}</Text>
-          <Text>expenses.thev7ninja.in</Text>
+          <Text render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
         </View>
       </Page>
     </Document>

@@ -34,5 +34,17 @@ export const PAYMENT_METHODS = ["Cash", "UPI", "Card", "Bank Transfer"] as const
 
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
-export const CURRENCY_SYMBOL = "₹";
-export const CURRENCY_CODE = "INR";
+/** Currencies selectable in the UI. Displayed symbol is used both on-screen and in the PDF. */
+export const CURRENCIES = [
+  { code: "INR", symbol: "₹", label: "Indian Rupee (₹)" },
+  { code: "USD", symbol: "$", label: "US Dollar ($)" },
+  { code: "EUR", symbol: "€", label: "Euro (€)" },
+  { code: "GBP", symbol: "£", label: "British Pound (£)" },
+] as const;
+
+export type CurrencyCode = (typeof CURRENCIES)[number]["code"];
+
+export const DEFAULT_CURRENCY = CURRENCIES[0];
+
+/** Minimum number of people a split can be divided among (splitting 1 way is meaningless). */
+export const MIN_SPLIT_PEOPLE = 2;

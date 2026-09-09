@@ -1,4 +1,4 @@
-import type { PaymentMethod } from "./constants";
+import type { PaymentMethod, CurrencyCode } from "./constants";
 
 export interface ExpenseLineItem {
   id: string;
@@ -10,19 +10,41 @@ export interface ExpenseLineItem {
   purchasedAt: string;
 }
 
+/** A named collection of line items, e.g. "Market" or "Mall" - each renders as its own section. */
+export interface ExpenseGroup {
+  id: string;
+  name: string;
+  items: ExpenseLineItem[];
+}
+
+export interface Currency {
+  code: CurrencyCode;
+  symbol: string;
+}
+
 export interface PayerDetails {
   phone: string;
   upiId: string;
   notes: string;
 }
 
+/** Split-the-bill state. `people` is a string while being edited; validated before use. */
+export interface SplitConfig {
+  enabled: boolean;
+  people: string;
+}
+
 export interface ExpenseDraft {
-  items: ExpenseLineItem[];
+  groups: ExpenseGroup[];
   payer: PayerDetails;
+  currency: Currency;
+  split: SplitConfig;
 }
 
 export interface SendExpenseEmailRequest {
-  items: ExpenseLineItem[];
+  groups: ExpenseGroup[];
   payer: PayerDetails;
   recipients: string[];
+  currency: Currency;
+  split: SplitConfig;
 }

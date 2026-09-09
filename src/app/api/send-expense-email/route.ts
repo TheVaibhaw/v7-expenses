@@ -2,18 +2,21 @@ import { NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 import { Resend } from "resend";
 import { ExpenseReportDocument } from "@/components/pdf/ExpenseReportDocument";
-import { validateRecipients, getValidLineItems } from "@/lib/validation";
-import { PAYMENT_METHODS } from "@/lib/constants";
-import type { ExpenseLineItem, PayerDetails } from "@/lib/types";
+import { registerPdfFonts } from "@/lib/pdf-fonts";
+import { validateRecipients, getValidGroups, isValidSplitCount, calculateGrandTotal } from "@/lib/validation";
+import { CURRENCIES, DEFAULT_CURRENCY, PAYMENT_METHODS } from "@/lib/constants";
+import type { Currency, ExpenseGroup, ExpenseLineItem, PayerDetails, SplitConfig } from "@/lib/types";
 
 // Resend's SDK and @react-pdf/renderer's Node rendering APIs need the Node.js runtime,
 // not the Edge runtime.
 export const runtime = "nodejs";
 
 interface RequestBody {
-  items?: unknown;
+  groups?: unknown;
   payer?: unknown;
   recipients?: unknown;
+  currency?: unknown;
+  split?: unknown;
 }
 
 function isPaymentMethod(value: unknown): value is (typeof PAYMENT_METHODS)[number] {
@@ -46,6 +49,20 @@ function parseLineItems(raw: unknown): ExpenseLineItem[] | null {
   return items;
 }
 
+function parseGroups(raw: unknown): ExpenseGroup[] | null {
+  if (!Array.isArray(raw)) return null;
+  const groups: ExpenseGroup[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) return null;
+    const candidate = entry as Record<string, unknown>;
+    if (typeof candidate.id !== "string" || typeof candidate.name !== "string") return null;
+    const items = parseLineItems(candidate.items);
+    if (!items) return null;
+    groups.push({ id: candidate.id, name: candidate.name, items });
+  }
+  return groups;
+}
+
 function parsePayer(raw: unknown): PayerDetails {
   if (typeof raw !== "object" || raw === null) return { phone: "", upiId: "", notes: "" };
   const candidate = raw as Record<string, unknown>;
@@ -54,6 +71,30 @@ function parsePayer(raw: unknown): PayerDetails {
     upiId: typeof candidate.upiId === "string" ? candidate.upiId : "",
     notes: typeof candidate.notes === "string" ? candidate.notes : "",
   };
+}
+
+function parseCurrency(raw: unknown): Currency {
+  if (typeof raw !== "object" || raw === null) return DEFAULT_CURRENCY;
+  const candidate = raw as Record<string, unknown>;
+  const match = CURRENCIES.find((c) => c.code === candidate.code);
+  return match ?? DEFAULT_CURRENCY;
+}
+
+/**
+ * Split state is never trusted from the client as-is: `enabled` must be a boolean and, when
+ * enabled, `people` must independently pass `isValidSplitCount` server-side too (same rule the
+ * UI enforces), and the grand total must be positive - otherwise split is treated as off.
+ */
+function parseSplit(raw: unknown, grandTotal: number): SplitConfig {
+  const disabled: SplitConfig = { enabled: false, people: "" };
+  if (typeof raw !== "object" || raw === null) return disabled;
+  const candidate = raw as Record<string, unknown>;
+  if (candidate.enabled !== true) return disabled;
+  const peopleRaw = candidate.people;
+  const peopleStr = typeof peopleRaw === "string" ? peopleRaw : typeof peopleRaw === "number" ? String(peopleRaw) : "";
+  if (!grandTotal || grandTotal <= 0) return disabled;
+  if (!isValidSplitCount(peopleStr)) return disabled;
+  return { enabled: true, people: peopleStr };
 }
 
 export async function POST(request: Request) {
@@ -87,20 +128,26 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid request body: expected JSON." }, { status: 400 });
   }
 
-  const items = parseLineItems(body.items);
-  if (!items) {
-    return NextResponse.json({ error: "Invalid or missing line items." }, { status: 400 });
+  const groups = parseGroups(body.groups);
+  if (!groups) {
+    return NextResponse.json({ error: "Invalid or missing expense groups." }, { status: 400 });
   }
 
-  const validItems = getValidLineItems(items);
-  if (validItems.length === 0) {
+  const validGroups = getValidGroups(groups);
+  if (validGroups.length === 0) {
     return NextResponse.json(
-      { error: "Add at least one complete line item (description, price, and date) before sending." },
+      {
+        error:
+          "Add at least one group with a name and one complete line item (description, price, and date) before sending.",
+      },
       { status: 400 },
     );
   }
 
   const payer = parsePayer(body.payer);
+  const currency = parseCurrency(body.currency);
+  const grandTotal = calculateGrandTotal(groups);
+  const split = parseSplit(body.split, grandTotal);
 
   if (!Array.isArray(body.recipients) || body.recipients.some((r) => typeof r !== "string")) {
     return NextResponse.json({ error: "Invalid recipients: expected a list of email addresses." }, { status: 400 });
@@ -124,19 +171,21 @@ export async function POST(request: Request) {
 
   let pdfBuffer: Buffer;
   try {
-    pdfBuffer = await renderToBuffer(ExpenseReportDocument({ items, payer }));
+    registerPdfFonts();
+    pdfBuffer = await renderToBuffer(ExpenseReportDocument({ groups, payer, currency, split }));
   } catch {
     return NextResponse.json({ error: "Failed to generate the PDF. Please try again." }, { status: 500 });
   }
 
   const resend = new Resend(apiKey);
+  const totalItems = validGroups.reduce((sum, group) => sum + group.items.length, 0);
 
   try {
     const { error } = await resend.emails.send({
       from: fromEmail,
       to: recipients,
       subject: "Your Expense Report",
-      html: `<p>Hi,</p><p>Please find attached your expense report, generated with The V7 Ninja Expense Tracker.</p><p>Total items: ${validItems.length}</p>`,
+      html: `<p>Hi,</p><p>Please find attached your expense report, generated with The V7 Ninja Expense Tracker.</p><p>Groups: ${validGroups.length} &middot; Total items: ${totalItems}</p>`,
       attachments: [
         {
           filename: "expense-report.pdf",

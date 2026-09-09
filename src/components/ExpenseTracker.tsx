@@ -1,19 +1,31 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Trash2, Download, Mail, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
-import { AUTOSAVE_DEBOUNCE_MS, CURRENCY_SYMBOL, PAYMENT_METHODS } from "@/lib/constants";
+import { Plus, Trash2, Download, Mail, Loader2, CheckCircle2, AlertCircle, Users } from "lucide-react";
+import { AUTOSAVE_DEBOUNCE_MS, CURRENCIES, DEFAULT_CURRENCY, MIN_SPLIT_PEOPLE, PAYMENT_METHODS } from "@/lib/constants";
 import { loadDraft, saveDraft } from "@/lib/storage";
-import type { ExpenseLineItem, PayerDetails } from "@/lib/types";
-import { calculateTotal, getValidLineItems, validateRecipients } from "@/lib/validation";
+import type { Currency, ExpenseGroup, ExpenseLineItem, PayerDetails, SplitConfig } from "@/lib/types";
+import {
+  calculateGrandTotal,
+  calculateGroupTotal,
+  computeSplitShare,
+  getValidGroups,
+  getValidLineItems,
+  isValidSplitCount,
+  validateRecipients,
+} from "@/lib/validation";
 import { generateExpensePdf } from "@/lib/generate-expense-pdf";
+
+function randomId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+}
 
 function createEmptyLineItem(): ExpenseLineItem {
   const now = new Date();
   now.setSeconds(0, 0);
   const localIso = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
   return {
-    id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+    id: randomId(),
     description: "",
     price: "",
     paymentMethod: "Cash",
@@ -21,7 +33,12 @@ function createEmptyLineItem(): ExpenseLineItem {
   };
 }
 
+function createEmptyGroup(name = ""): ExpenseGroup {
+  return { id: randomId(), name, items: [createEmptyLineItem()] };
+}
+
 const EMPTY_PAYER: PayerDetails = { phone: "", upiId: "", notes: "" };
+const EMPTY_SPLIT: SplitConfig = { enabled: false, people: "" };
 
 type SendState =
   | { status: "idle" }
@@ -30,8 +47,10 @@ type SendState =
   | { status: "error"; message: string };
 
 export function ExpenseTracker() {
-  const [items, setItems] = useState<ExpenseLineItem[]>([createEmptyLineItem()]);
+  const [groups, setGroups] = useState<ExpenseGroup[]>([createEmptyGroup()]);
   const [payer, setPayer] = useState<PayerDetails>(EMPTY_PAYER);
+  const [currency, setCurrency] = useState<Currency>(DEFAULT_CURRENCY);
+  const [split, setSplit] = useState<SplitConfig>(EMPTY_SPLIT);
   const [hydrated, setHydrated] = useState(false);
   const [downloadState, setDownloadState] = useState<"idle" | "generating" | "error">("idle");
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -43,13 +62,15 @@ export function ExpenseTracker() {
   // reactive sync loop), so the batched setState calls here are intentional and safe.
   useEffect(() => {
     const draft = loadDraft();
-    if (draft && draft.items.length > 0) {
+    if (draft && draft.groups.length > 0) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time localStorage hydration on mount, not a reactive sync loop
-      setItems(draft.items);
+      setGroups(draft.groups);
       setPayer(draft.payer);
+      setCurrency(draft.currency);
+      setSplit(draft.split);
     }
     setHydrated(true);
-     
+
   }, []);
 
   // Debounced autosave.
@@ -57,33 +78,59 @@ export function ExpenseTracker() {
     if (!hydrated) return;
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(() => {
-      saveDraft({ items, payer });
+      saveDraft({ groups, payer, currency, split });
     }, AUTOSAVE_DEBOUNCE_MS);
     return () => {
       if (saveTimeout.current) clearTimeout(saveTimeout.current);
     };
-  }, [items, payer, hydrated]);
+  }, [groups, payer, currency, split, hydrated]);
 
-  const total = useMemo(() => calculateTotal(items), [items]);
-  const validItems = useMemo(() => getValidLineItems(items), [items]);
-  const canGenerate = validItems.length > 0;
+  const grandTotal = useMemo(() => calculateGrandTotal(groups), [groups]);
+  const validGroups = useMemo(() => getValidGroups(groups), [groups]);
+  const canGenerate = validGroups.length > 0;
 
-  const updateItem = useCallback((id: string, patch: Partial<ExpenseLineItem>) => {
-    setItems((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  const updateGroupName = useCallback((groupId: string, name: string) => {
+    setGroups((prev) => prev.map((group) => (group.id === groupId ? { ...group, name } : group)));
   }, []);
 
-  const addItem = useCallback(() => {
-    setItems((prev) => [...prev, createEmptyLineItem()]);
+  const updateItem = useCallback((groupId: string, itemId: string, patch: Partial<ExpenseLineItem>) => {
+    setGroups((prev) =>
+      prev.map((group) =>
+        group.id === groupId
+          ? { ...group, items: group.items.map((item) => (item.id === itemId ? { ...item, ...patch } : item)) }
+          : group,
+      ),
+    );
   }, []);
 
-  const removeItem = useCallback((id: string) => {
-    setItems((prev) => (prev.length === 1 ? prev : prev.filter((item) => item.id !== id)));
+  const addItem = useCallback((groupId: string) => {
+    setGroups((prev) =>
+      prev.map((group) => (group.id === groupId ? { ...group, items: [...group.items, createEmptyLineItem()] } : group)),
+    );
+  }, []);
+
+  const removeItem = useCallback((groupId: string, itemId: string) => {
+    setGroups((prev) =>
+      prev.map((group) =>
+        group.id === groupId
+          ? { ...group, items: group.items.length === 1 ? group.items : group.items.filter((item) => item.id !== itemId) }
+          : group,
+      ),
+    );
+  }, []);
+
+  const addGroup = useCallback(() => {
+    setGroups((prev) => [...prev, createEmptyGroup()]);
+  }, []);
+
+  const removeGroup = useCallback((groupId: string) => {
+    setGroups((prev) => (prev.length === 1 ? prev : prev.filter((group) => group.id !== groupId)));
   }, []);
 
   const handleDownload = useCallback(async () => {
     setDownloadState("generating");
     setDownloadError(null);
-    const result = await generateExpensePdf(items, payer);
+    const result = await generateExpensePdf(groups, payer, currency, split);
     if (result.status === "error") {
       setDownloadState("error");
       setDownloadError(result.message);
@@ -98,7 +145,7 @@ export function ExpenseTracker() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     setDownloadState("idle");
-  }, [items, payer]);
+  }, [groups, payer, currency, split]);
 
   const { valid: recipientPreview, invalid: recipientInvalidPreview } = useMemo(
     () => validateRecipients(recipientsInput),
@@ -125,7 +172,7 @@ export function ExpenseTracker() {
       const response = await fetch("/api/send-expense-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items, payer, recipients: recipientPreview }),
+        body: JSON.stringify({ groups, payer, currency, split, recipients: recipientPreview }),
       });
       const data: { error?: string; sentTo?: string[] } = await response.json();
       if (!response.ok) {
@@ -136,110 +183,280 @@ export function ExpenseTracker() {
     } catch {
       setSendState({ status: "error", message: "Network error - please check your connection and try again." });
     }
-  }, [items, payer, recipientPreview, recipientInvalidPreview]);
+  }, [groups, payer, currency, split, recipientPreview, recipientInvalidPreview]);
+
+  // Split validation: number of people must be an integer >= MIN_SPLIT_PEOPLE, and the split
+  // option only makes sense once there's a positive grand total.
+  const splitPeopleTouched = split.people.trim().length > 0;
+  const splitCountValid = !splitPeopleTouched || isValidSplitCount(split.people);
+  const splitShare = split.enabled && grandTotal > 0 ? computeSplitShare(grandTotal, Number(split.people)) : null;
+  const splitErrorMessage =
+    split.enabled && splitPeopleTouched && !splitCountValid
+      ? `Number of people must be a whole number of at least ${MIN_SPLIT_PEOPLE}.`
+      : null;
 
   return (
     <div id="tracker" className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
       <div className="card p-4 sm:p-6 md:p-8">
-        <div className="mb-6 flex items-center justify-between gap-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">Line items</h2>
-            <p className="mt-1 text-sm text-slate-500">Add every item you bought, with its price, payment method, and time.</p>
+            <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">Currency</h2>
+            <p className="mt-1 text-sm text-slate-500">Applies to on-screen totals, the PDF, and the emailed copy.</p>
           </div>
-          <button type="button" onClick={addItem} className="btn-secondary shrink-0 !px-4 !py-2 text-sm">
-            <Plus className="h-4 w-4" aria-hidden />
-            Add item
-          </button>
+          <select
+            value={currency.code}
+            onChange={(e) => {
+              const match = CURRENCIES.find((c) => c.code === e.target.value);
+              if (match) setCurrency(match);
+            }}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900 outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 sm:w-auto"
+          >
+            {CURRENCIES.map((c) => (
+              <option key={c.code} value={c.code}>
+                {c.label}
+              </option>
+            ))}
+          </select>
         </div>
+      </div>
 
-        <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
-          <table className="w-full min-w-[640px] border-separate border-spacing-y-2 text-sm">
-            <thead>
-              <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <th className="px-3 py-2">Item / description</th>
-                <th className="px-3 py-2">Price ({CURRENCY_SYMBOL})</th>
-                <th className="px-3 py-2">Payment method</th>
-                <th className="px-3 py-2">Date &amp; time</th>
-                <th className="px-3 py-2 text-right">Remove</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((item) => {
-                const priceInvalid = item.price !== "" && !(Number(item.price) > 0);
-                return (
-                  <tr key={item.id} className="rounded-lg bg-slate-50">
-                    <td className="rounded-l-lg px-3 py-2">
-                      <input
-                        type="text"
-                        value={item.description}
-                        onChange={(e) => updateItem(item.id, { description: e.target.value })}
-                        placeholder="e.g. Tomatoes, 2 kg"
-                        className="w-full min-w-[10rem] rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900 outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={item.price}
-                        onChange={(e) => updateItem(item.id, { price: e.target.value })}
-                        placeholder="0.00"
-                        aria-invalid={priceInvalid}
-                        className={`w-24 rounded-lg border bg-white px-3 py-2 text-slate-900 outline-none focus:ring-2 ${
-                          priceInvalid
-                            ? "border-red-300 focus:border-red-400 focus:ring-red-100"
-                            : "border-slate-200 focus:border-accent focus:ring-accent/20"
-                        }`}
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <select
-                        value={item.paymentMethod}
-                        onChange={(e) =>
-                          updateItem(item.id, { paymentMethod: e.target.value as ExpenseLineItem["paymentMethod"] })
-                        }
-                        className="w-full min-w-[8.5rem] rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900 outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-                      >
-                        {PAYMENT_METHODS.map((method) => (
-                          <option key={method} value={method}>
-                            {method}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="px-3 py-2">
-                      <input
-                        type="datetime-local"
-                        value={item.purchasedAt}
-                        onChange={(e) => updateItem(item.id, { purchasedAt: e.target.value })}
-                        className="w-full min-w-[11rem] rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900 outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-                      />
-                    </td>
-                    <td className="rounded-r-lg px-3 py-2 text-right">
-                      <button
-                        type="button"
-                        onClick={() => removeItem(item.id)}
-                        disabled={items.length === 1}
-                        aria-label="Remove line item"
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 disabled:pointer-events-none disabled:opacity-30"
-                      >
-                        <Trash2 className="h-4 w-4" aria-hidden />
-                      </button>
-                    </td>
+      {groups.map((group) => {
+        const groupTotal = calculateGroupTotal(group);
+        const validItemCount = getValidLineItems(group.items).length;
+        return (
+          <div key={group.id} className="card mt-6 p-4 sm:p-6 md:p-8">
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex-1">
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium text-slate-700">Group name</span>
+                  <input
+                    type="text"
+                    value={group.name}
+                    onChange={(e) => updateGroupName(group.id, e.target.value)}
+                    placeholder="e.g. Market, Mall, Groceries"
+                    className="w-full max-w-sm rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-900 outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                  />
+                </label>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <button type="button" onClick={() => addItem(group.id)} className="btn-secondary !px-4 !py-2 text-sm">
+                  <Plus className="h-4 w-4" aria-hidden />
+                  Add item
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeGroup(group.id)}
+                  disabled={groups.length === 1}
+                  aria-label="Remove group"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 disabled:pointer-events-none disabled:opacity-30"
+                >
+                  <Trash2 className="h-4 w-4" aria-hidden />
+                </button>
+              </div>
+            </div>
+
+            <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+              <table className="w-full min-w-[640px] border-separate border-spacing-y-2 text-sm">
+                <thead>
+                  <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    <th className="px-3 py-2">Item / description</th>
+                    <th className="px-3 py-2">Price ({currency.symbol})</th>
+                    <th className="px-3 py-2">Payment method</th>
+                    <th className="px-3 py-2">Date &amp; time</th>
+                    <th className="px-3 py-2 text-right">Remove</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {group.items.map((item) => {
+                    const priceInvalid = item.price !== "" && !(Number(item.price) > 0);
+                    return (
+                      <tr key={item.id} className="rounded-lg bg-slate-50">
+                        <td className="rounded-l-lg px-3 py-2">
+                          <input
+                            type="text"
+                            value={item.description}
+                            onChange={(e) => updateItem(group.id, item.id, { description: e.target.value })}
+                            placeholder="e.g. Tomatoes, 2 kg"
+                            className="w-full min-w-[10rem] rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900 outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                          />
+                        </td>
+                        <td className="px-3 py-2">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.price}
+                            onChange={(e) => updateItem(group.id, item.id, { price: e.target.value })}
+                            placeholder="0.00"
+                            aria-invalid={priceInvalid}
+                            className={`w-24 rounded-lg border bg-white px-3 py-2 text-slate-900 outline-none focus:ring-2 ${
+                              priceInvalid
+                                ? "border-red-300 focus:border-red-400 focus:ring-red-100"
+                                : "border-slate-200 focus:border-accent focus:ring-accent/20"
+                            }`}
+                          />
+                        </td>
+                        <td className="px-3 py-2">
+                          <select
+                            value={item.paymentMethod}
+                            onChange={(e) =>
+                              updateItem(group.id, item.id, {
+                                paymentMethod: e.target.value as ExpenseLineItem["paymentMethod"],
+                              })
+                            }
+                            className="w-full min-w-[8.5rem] rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900 outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                          >
+                            {PAYMENT_METHODS.map((method) => (
+                              <option key={method} value={method}>
+                                {method}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-3 py-2">
+                          <input
+                            type="datetime-local"
+                            value={item.purchasedAt}
+                            onChange={(e) => updateItem(group.id, item.id, { purchasedAt: e.target.value })}
+                            className="w-full min-w-[11rem] rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900 outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+                          />
+                        </td>
+                        <td className="rounded-r-lg px-3 py-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() => removeItem(group.id, item.id)}
+                            disabled={group.items.length === 1}
+                            aria-label="Remove line item"
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 disabled:pointer-events-none disabled:opacity-30"
+                          >
+                            <Trash2 className="h-4 w-4" aria-hidden />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
+              <span className="text-xs text-slate-400">
+                {validItemCount} valid item{validItemCount === 1 ? "" : "s"}
+                {group.name.trim().length === 0 && " · name this group to include it in the total"}
+              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium text-slate-500">Subtotal</span>
+                <span className="text-lg font-bold text-slate-900">
+                  {currency.symbol}
+                  {groupTotal.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      <div className="mt-6 flex justify-center">
+        <button type="button" onClick={addGroup} className="btn-secondary !px-4 !py-2 text-sm">
+          <Plus className="h-4 w-4" aria-hidden />
+          Add group
+        </button>
+      </div>
+
+      <div className="card mt-6 p-4 sm:p-6 md:p-8">
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-sm font-medium text-slate-500">Grand total ({validGroups.length} group{validGroups.length === 1 ? "" : "s"})</span>
+          <span className="text-xl font-bold text-slate-900">
+            {currency.symbol}
+            {grandTotal.toFixed(2)}
+          </span>
         </div>
 
-        <div className="mt-4 flex items-center justify-end gap-3 border-t border-slate-100 pt-4">
-          <span className="text-sm font-medium text-slate-500">Total</span>
-          <span className="text-xl font-bold text-slate-900">
-            {CURRENCY_SYMBOL}
-            {total.toFixed(2)}
-          </span>
+        <div className="mt-4 border-t border-slate-100 pt-4">
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+            <input
+              type="checkbox"
+              checked={split.enabled}
+              disabled={grandTotal <= 0}
+              onChange={(e) => setSplit((prev) => ({ ...prev, enabled: e.target.checked }))}
+              className="h-4 w-4 rounded border-slate-300 text-accent focus:ring-accent/30"
+            />
+            <Users className="h-4 w-4 text-slate-400" aria-hidden />
+            Split this expense
+          </label>
+          {grandTotal <= 0 && (
+            <p className="mt-1 text-xs text-slate-400">
+              Add at least one complete, named group with a valid item before you can split the total.
+            </p>
+          )}
+
+          {split.enabled && grandTotal > 0 && (
+            <div className="mt-3">
+              <label className="block text-sm sm:max-w-xs">
+                <span className="mb-1 block font-medium text-slate-700">Number of people</span>
+                <input
+                  type="number"
+                  min={MIN_SPLIT_PEOPLE}
+                  step="1"
+                  value={split.people}
+                  onChange={(e) => setSplit((prev) => ({ ...prev, people: e.target.value }))}
+                  placeholder={String(MIN_SPLIT_PEOPLE)}
+                  aria-invalid={Boolean(splitErrorMessage)}
+                  className={`w-full rounded-lg border bg-white px-3 py-2 text-slate-900 outline-none focus:ring-2 ${
+                    splitErrorMessage
+                      ? "border-red-300 focus:border-red-400 focus:ring-red-100"
+                      : "border-slate-200 focus:border-accent focus:ring-accent/20"
+                  }`}
+                />
+              </label>
+              {splitErrorMessage && (
+                <p className="mt-2 flex items-center gap-2 text-sm text-red-600">
+                  <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
+                  {splitErrorMessage}
+                </p>
+              )}
+
+              {splitShare && (
+                <div className="mt-4 rounded-xl border border-accent/20 bg-accent-soft p-4">
+                  <h3 className="text-sm font-semibold text-slate-900">Split Summary</h3>
+                  {splitShare.extraCount === 0 ? (
+                    <p className="mt-1 text-sm text-slate-700">
+                      Total: {currency.symbol}
+                      {splitShare.total.toFixed(2)} &middot; Split {splitShare.people} ways &middot;{" "}
+                      <span className="font-semibold text-accent">
+                        {currency.symbol}
+                        {splitShare.baseAmount.toFixed(2)} per person
+                      </span>
+                    </p>
+                  ) : (
+                    <>
+                      <p className="mt-1 text-sm text-slate-700">
+                        Total: {currency.symbol}
+                        {splitShare.total.toFixed(2)} &middot; Split {splitShare.people} ways
+                      </p>
+                      <p className="mt-1 text-sm text-slate-700">
+                        {splitShare.extraCount} person{splitShare.extraCount === 1 ? "" : "s"} pay{" "}
+                        <span className="font-semibold text-accent">
+                          {currency.symbol}
+                          {splitShare.higherAmount.toFixed(2)}
+                        </span>
+                        , {splitShare.people - splitShare.extraCount} person
+                        {splitShare.people - splitShare.extraCount === 1 ? "" : "s"} pay{" "}
+                        <span className="font-semibold text-accent">
+                          {currency.symbol}
+                          {splitShare.baseAmount.toFixed(2)}
+                        </span>
+                      </p>
+                      <p className="mt-2 text-xs text-slate-500">
+                        The total doesn&apos;t divide evenly, so the extra paisa/cent is distributed to a few people
+                        instead of being rounded away - shares always add up exactly to the total.
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -287,7 +504,7 @@ export function ExpenseTracker() {
           <div>
             <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">Download your PDF</h2>
             <p className="mt-1 text-sm text-slate-500">
-              {canGenerate ? "Get a clean, professional record of this expense." : "Add at least one complete line item to enable this."}
+              {canGenerate ? "Get a clean, professional record of this expense." : "Add at least one named group with a complete line item to enable this."}
             </p>
           </div>
           <button
