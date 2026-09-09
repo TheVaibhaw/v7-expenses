@@ -1,0 +1,23 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4f46e5"/>
+      <stop offset="100%" style="stop-color:#312e81"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <circle cx="1050" cy="80" r="180" fill="white" opacity="0.06"/>
+  <circle cx="120" cy="560" r="140" fill="white" opacity="0.06"/>
+
+  <rect x="90" y="150" width="260" height="330" rx="16" fill="white" opacity="0.97"/>
+  <line x1="130" y1="210" x2="310" y2="210" stroke="#4f46e5" stroke-width="10" stroke-linecap="round"/>
+  <line x1="130" y1="250" x2="310" y2="250" stroke="#4f46e5" stroke-width="10" stroke-linecap="round"/>
+  <line x1="130" y1="290" x2="260" y2="290" stroke="#4f46e5" stroke-width="10" stroke-linecap="round"/>
+  <line x1="130" y1="420" x2="310" y2="420" stroke="#c7d2fe" stroke-width="10" stroke-linecap="round"/>
+  <line x1="130" y1="450" x2="240" y2="450" stroke="#c7d2fe" stroke-width="10" stroke-linecap="round"/>
+
+  <text x="420" y="270" font-family="Helvetica, Arial, sans-serif" font-size="56" font-weight="700" fill="white">The V7 Ninja</text>
+  <text x="420" y="335" font-family="Helvetica, Arial, sans-serif" font-size="56" font-weight="700" fill="white">Expense Tracker</text>
+  <text x="420" y="390" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#c7d2fe">Track purchases. Generate a professional PDF.</text>
+  <text x="420" y="428" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#c7d2fe">Email it in one click. Free &amp; private.</text>
+</svg>

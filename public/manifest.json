@@ -1,0 +1,27 @@
+{
+  "name": "The V7 Ninja Expense Tracker",
+  "short_name": "V7 Ninja Expenses",
+  "description": "Free, private, browser-based expense tracker. Track purchases and generate a professional PDF record - download or email it.",
+  "start_url": "/",
+  "id": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#4f46e5",
+  "orientation": "any",
+  "scope": "/",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["finance", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "related_applications": [
+    { "platform": "webapp", "url": "https://thev7ninja.in" }
+  ],
+  "prefer_related_applications": false
+}
