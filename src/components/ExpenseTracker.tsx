@@ -102,6 +102,13 @@ export function ExpenseTracker() {
   const grandTotal = useMemo(() => calculateGrandTotal(groups), [groups]);
   const validGroups = useMemo(() => getValidGroups(groups), [groups]);
   const canGenerate = validGroups.length > 0;
+  // Several countries share a currency code (e.g. the Eurozone) - the dropdown is keyed by the
+  // per-country `id`, so resolve which option to show as selected from the current code alone
+  // (deterministically the first country in the list using that currency).
+  const selectedCurrencyId = useMemo(
+    () => CURRENCIES.find((c) => c.code === currency.code)?.id ?? CURRENCIES[0].id,
+    [currency.code],
+  );
 
   const updateGroupName = useCallback((groupId: string, name: string) => {
     setGroups((prev) => prev.map((group) => (group.id === groupId ? { ...group, name } : group)));
@@ -234,17 +241,17 @@ export function ExpenseTracker() {
           <div className="flex items-center gap-2">
             <ClipboardList className="h-4 w-4 shrink-0 text-slate-400" aria-hidden />
             <select
-              value={currency.code}
+              value={selectedCurrencyId}
               onChange={(e) => {
-                const match = CURRENCIES.find((c) => c.code === e.target.value);
-                if (match) setCurrency(match);
+                const match = CURRENCIES.find((c) => c.id === e.target.value);
+                if (match) setCurrency({ code: match.code, symbol: match.symbol });
               }}
-              aria-label="Currency"
-              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-900 outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+              aria-label="Currency (by country)"
+              className="max-w-[14rem] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-900 outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
             >
               {CURRENCIES.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.label}
+                <option key={c.id} value={c.id}>
+                  {c.country} &middot; {c.code} ({c.symbol})
                 </option>
               ))}
             </select>
