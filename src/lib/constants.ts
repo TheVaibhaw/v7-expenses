@@ -252,3 +252,8 @@ export const MIN_SPLIT_PEOPLE = 2;
  * stay scannable in a PDF.
  */
 export const MAX_QR_IMAGE_BYTES = 1_000_000;
+
+export const QR_OUTPUT_SIZE = 512;
+export const QR_CROP_VIEWPORT = 280;
+export const QR_ZOOM_MIN = 1;
+export const QR_ZOOM_MAX = 4;

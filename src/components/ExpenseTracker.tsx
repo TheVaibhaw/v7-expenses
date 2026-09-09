@@ -28,11 +28,13 @@ import {
   getValidGroups,
   getValidLineItems,
   getValidSplitPeople,
+  isValidQrDataUrl,
   isValidQrImageFile,
   isValidSplitCount,
   validateRecipients,
 } from "@/lib/validation";
 import { generateExpensePdf } from "@/lib/generate-expense-pdf";
+import { QrCropModal } from "@/components/QrCropModal";
 
 function randomId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
@@ -79,6 +81,7 @@ export function ExpenseTracker() {
   const [recipientsInput, setRecipientsInput] = useState("");
   const [sendState, setSendState] = useState<SendState>({ status: "idle" });
   const [qrError, setQrError] = useState<string | null>(null);
+  const [qrCropSource, setQrCropSource] = useState<string | null>(null);
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const qrInputRef = useRef<HTMLInputElement>(null);
   const reduceMotion = useReducedMotion();
@@ -203,13 +206,27 @@ export function ExpenseTracker() {
       return;
     }
     const reader = new FileReader();
+    // Don't save the raw upload directly - open the crop tool first, so the stored image is
+    // always a consistent, scannable square regardless of what the original photo looked like.
     reader.onload = () => {
-      if (typeof reader.result === "string") {
-        setPayer((prev) => ({ ...prev, qrCodeImage: reader.result as string }));
-      }
+      if (typeof reader.result === "string") setQrCropSource(reader.result);
     };
     reader.onerror = () => setQrError("Couldn't read that image. Please try a different file.");
     reader.readAsDataURL(file);
+  }, []);
+
+  const handleQrCropConfirm = useCallback((croppedDataUrl: string) => {
+    setQrCropSource(null);
+    if (!isValidQrDataUrl(croppedDataUrl)) {
+      setQrError("The cropped image came out too large - please try again with a simpler image.");
+      return;
+    }
+    setQrError(null);
+    setPayer((prev) => ({ ...prev, qrCodeImage: croppedDataUrl }));
+  }, []);
+
+  const handleQrCropCancel = useCallback(() => {
+    setQrCropSource(null);
   }, []);
 
   const removeQrImage = useCallback(() => {
@@ -815,10 +832,20 @@ export function ExpenseTracker() {
                     alt="Uploaded UPI QR code"
                     className="h-20 w-20 rounded-lg border border-slate-200 object-cover"
                   />
-                  <button type="button" onClick={removeQrImage} className="btn-secondary !px-4 !py-2 text-sm">
-                    <Trash2 className="h-4 w-4" aria-hidden />
-                    Remove
-                  </button>
+                  <div className="flex flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setQrCropSource(payer.qrCodeImage)}
+                      className="btn-secondary !px-4 !py-2 text-sm"
+                    >
+                      <ImageUp className="h-4 w-4" aria-hidden />
+                      Re-crop
+                    </button>
+                    <button type="button" onClick={removeQrImage} className="btn-secondary !px-4 !py-2 text-sm">
+                      <Trash2 className="h-4 w-4" aria-hidden />
+                      Remove
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <button
@@ -911,6 +938,10 @@ export function ExpenseTracker() {
           )}
         </div>
       </div>
+
+      {qrCropSource && (
+        <QrCropModal src={qrCropSource} onCancel={handleQrCropCancel} onConfirm={handleQrCropConfirm} />
+      )}
     </div>
   );
 }
