@@ -145,7 +145,7 @@ const jsonLd = [
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     name: APP_NAME,
-    url: SITE_URL,
+    url: `${SITE_URL}/tracker`,
     description: APP_DESCRIPTION,
     applicationCategory: "FinanceApplication, BusinessApplication",
     operatingSystem: "Windows, macOS, Linux, iOS, Android",
